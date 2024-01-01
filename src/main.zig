@@ -215,6 +215,10 @@ pub fn parseRegistry(
         read_buffer.clearAndFree();
         try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
 
+        // check if we are inside a comment
+        // and make sure we have read a full comment tag incase a comment contains a valid
+        // xml tag
+        // eg. <!-- <element attr1=""/> -->
         if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
             while (!std.mem.eql(u8, read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len], "--")) {
                 try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
