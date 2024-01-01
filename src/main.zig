@@ -113,6 +113,15 @@ fn skipWhitespace(reader: anytype) !u8 {
     };
 }
 
+const ParseXmlAttribute = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
+fn parseXmlAttribute(buffer: []const u8) !ParseXmlAttribute {
+    _ = buffer;
+}
+
 fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     _ = allocator;
     var stream = std.io.fixedBufferStream(buffer);
@@ -169,7 +178,7 @@ fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
             try stream.seekBy(-1);
             const name_len = readXmlName(reader, &name_buffer) catch |err| switch (err) {
                 error.EndOfStream => buffer.len,
-                error.InvalidChar => if (stream.pos == buffer.len) buffer.len - 1 else return err,
+                error.InvalidChar => if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/') buffer.len - 1 else return err,
                 else => return err,
             };
             const name = buffer[0..name_len];
