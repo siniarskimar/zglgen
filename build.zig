@@ -4,12 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zig_clap = b.dependency("clap", .{});
+
     const exe = b.addExecutable(.{
         .name = "zglgen",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
+    exe.addModule("clap", zig_clap.module("clap"));
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
