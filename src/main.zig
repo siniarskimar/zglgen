@@ -73,14 +73,16 @@ const XmlTag = union(enum) {
     };
 };
 
-fn readXmlName(reader: anytype, buffer: []u8) !usize {
+fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
     switch (try reader.readByte()) {
         ':',
         'A'...'Z',
         '_',
         'a'...'z',
         => |c| {
-            buffer[0] = c;
+            if (buffer) |b| {
+                b[0] = c;
+            }
         },
         else => return error.InvalidChar,
     }
@@ -94,10 +96,12 @@ fn readXmlName(reader: anytype, buffer: []u8) !usize {
         '_',
         'a'...'z',
         => |c| {
-            if (idx >= buffer.len) {
-                return error.NameTooLong;
+            if (buffer) |b| {
+                if (idx >= b.len) {
+                    return error.NameTooLong;
+                }
+                b[0] = c;
             }
-            buffer[idx] = c;
             idx += 1;
         },
         ' ', '\n', '\t', '\r' => break,
@@ -127,8 +131,6 @@ fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     var stream = std.io.fixedBufferStream(buffer);
     const reader = stream.reader();
 
-    var name_buffer = [_]u8{0} ** 512;
-
     switch (try reader.readByte()) {
         '?' => {
             const name = try reader.readBytesNoEof(3);
@@ -140,7 +142,7 @@ fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
             } };
         },
         '/' => {
-            const name_len = readXmlName(reader, &name_buffer) catch |err| switch (err) {
+            const name_len = readXmlName(reader, null) catch |err| switch (err) {
                 error.EndOfStream => buffer.len,
                 else => return err,
             };
@@ -176,7 +178,7 @@ fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
                 return error.UnknownTag;
             }
             try stream.seekBy(-1);
-            const name_len = readXmlName(reader, &name_buffer) catch |err| switch (err) {
+            const name_len = readXmlName(reader, null) catch |err| switch (err) {
                 error.EndOfStream => buffer.len,
                 error.InvalidChar => if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/') buffer.len - 1 else return err,
                 else => return err,
