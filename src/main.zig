@@ -177,6 +177,10 @@ fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
             // <element attr="v1" .. > or <element attr="v1" .. />
             var tag = XmlTag.StartTag{ .name = name, .self_close = false };
             errdefer tag.deinit(allocator);
+            if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/') {
+                tag.self_close = true;
+                return .{ .start_tag = tag };
+            }
 
             while (true) {
                 const ch = skipWhitespace(reader) catch |err| switch (err) {
