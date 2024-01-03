@@ -338,6 +338,10 @@ pub fn parseRegistry(
         var xml_tag = try parseXmlTag(allocator, read_buffer.items);
         switch (xml_tag) {
             .xml_decl => |*tag| {
+                if (tag.version.order(.{ .major = 1, .minor = 0, .patch = 0 }) == .gt) {
+                    std.debug.print("(xml) Unsupported XML version\n", .{});
+                    return error.UnsupportedVersion;
+                }
                 std.debug.print("<?xml version='{}.{}'?>", .{ tag.version.major, tag.version.minor });
             },
             .start_tag => |*tag| {
