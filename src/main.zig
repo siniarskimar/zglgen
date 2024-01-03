@@ -3,9 +3,13 @@ const clap = @import("clap");
 
 const ElementTag = enum {
     registry,
+
     comment,
+    name,
+
     types,
     type,
+    apientry,
     kinds,
     kind,
 
@@ -15,13 +19,18 @@ const ElementTag = enum {
 
     commands,
     command,
+    proto,
+    param,
+    ptype,
+    glx,
+    alias,
+    vecequiv,
+
     feature,
-    require,
-    remove,
     extensions,
     extension,
-    apientry,
-    name,
+    require,
+    remove,
 };
 
 const Element = struct {
@@ -33,6 +42,28 @@ const Element = struct {
         element: Element,
         text: []const u8,
     };
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        for (self.content.items) |*content| switch (content.*) {
+            .element => content.element.deinit(allocator),
+            .text => allocator.free(content.text),
+        };
+        self.content.deinit(allocator);
+
+        {
+            var it = self.attributes.keyIterator();
+            while (it.next()) |key| {
+                allocator.free(key.*);
+            }
+        }
+        {
+            var it = self.attributes.valueIterator();
+            while (it.next()) |value| {
+                allocator.free(value.*);
+            }
+        }
+        self.attributes.deinit(allocator);
+    }
 };
 
 pub const Registry = struct {
@@ -240,6 +271,20 @@ pub fn parseRegistry(
     const TagOrElement = union(enum) {
         tag: ElementTag,
         element: Element,
+
+        fn getTag(self: @This()) ElementTag {
+            return switch (self) {
+                .tag => |t| t,
+                .element => self.tag,
+            };
+        }
+
+        fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
+            switch (self.*) {
+                .tag => {},
+                .element => |*element| element.deinit(alloc),
+            }
+        }
     };
 
     var element_stack = std.ArrayList(TagOrElement).init(allocator);
@@ -274,9 +319,22 @@ pub fn parseRegistry(
             .start_tag => |*tag| {
                 std.debug.print("<{s}> {}\n", .{ tag.name, tag.self_close });
                 tag.deinit(allocator);
+                const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
+                if (!tag.self_close) {
+                    try element_stack.append(.{ .tag = elemtag });
+                }
             },
             .end_tag => |*tag| {
                 std.debug.print("</{s}>\n", .{tag.name});
+                const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
+
+                if (element_stack.getLastOrNull()) |element| {
+                    if (element.getTag() != elemtag) {
+                        return error.EndTagMismatch;
+                    }
+                    element_stack.items[element_stack.items.len - 1].deinit(allocator);
+                    _ = element_stack.pop();
+                }
             },
             .comment => {},
         }
