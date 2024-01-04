@@ -39,26 +39,29 @@ fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
         else => return error.InvalidChar,
     }
     var idx: usize = 1;
-    while (true) switch (try reader.readByte()) {
-        '-',
-        '.',
-        ':',
-        '0'...'9',
-        'A'...'Z',
-        '_',
-        'a'...'z',
-        => |c| {
-            if (buffer) |b| {
-                if (idx >= b.len) {
-                    return error.NameTooLong;
+    while (true) {
+        const c = try reader.readByte();
+        idx += 1;
+        switch (c) {
+            '-',
+            '.',
+            ':',
+            '0'...'9',
+            'A'...'Z',
+            '_',
+            'a'...'z',
+            => {
+                if (buffer) |b| {
+                    if (idx >= b.len) {
+                        return error.NameTooLong;
+                    }
+                    b[0] = c;
                 }
-                b[0] = c;
-            }
-            idx += 1;
-        },
-        ' ', '\n', '\t', '\r' => break,
-        else => return error.InvalidChar,
-    };
+            },
+            ' ', '\n', '\t', '\r' => break,
+            else => return error.InvalidChar,
+        }
+    }
     return idx;
 }
 
@@ -332,11 +335,39 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype) !XmlTree {
     if (element_stack.items.len != 0) return error.UnenclosedTags;
     return tree;
 }
+test "xml_decl" {
+    {
+        const buffer =
+            \\<?xml version="1.0"?>
+        ;
+        var stream = std.io.fixedBufferStream(buffer);
+        var tree = try parseXml(std.testing.allocator, stream.reader());
+        defer tree.deinit();
+
+        try std.testing.expect(tree.root == null);
+        try std.testing.expect(tree.xml_decl != null);
+        try std.testing.expectEqual(std.math.Order.eq, tree.xml_decl.?.version.order(.{ .major = 1, .minor = 0, .patch = 0 }));
+    }
+    {
+        const buffer =
+            \\<?xml version="9.2"?>
+        ;
+        var stream = std.io.fixedBufferStream(buffer);
+        var tree = try parseXml(std.testing.allocator, stream.reader());
+        defer tree.deinit();
+
+        try std.testing.expect(tree.root == null);
+        try std.testing.expect(tree.xml_decl != null);
+        try std.testing.expectEqual(std.math.Order.eq, tree.xml_decl.?.version.order(.{ .major = 9, .minor = 2, .patch = 0 }));
+    }
+}
 
 test "attributes" {
     const buffer =
         \\<?xml version="1.0"?>
-        \\<root><tag1 attr1="value1"/></root>
+        \\<root>
+        \\ <tag1 attr1 = "value1"/>
+        \\</root>
     ;
     var stream = std.io.fixedBufferStream(buffer);
     var tree = try parseXml(std.testing.allocator, stream.reader());
