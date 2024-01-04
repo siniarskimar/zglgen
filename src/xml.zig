@@ -75,7 +75,7 @@ fn skipWhitespace(reader: anytype) !u8 {
 fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.mem.Allocator, stream: anytype, reader: anytype) !void {
     switch (TagType) {
         XmlTag.StartTag, XmlTag.XmlDecl => {},
-        else => @compileError("Unsupported tag type"),
+        else => @compileError(@typeName(TagType) ++ " does not accept attributes"),
     }
     const buffer = stream.buffer;
 
@@ -128,7 +128,7 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
                     tag.version = std.SemanticVersion{ .major = major, .minor = minor, .patch = 0 };
                 }
             },
-            else => @compileError("Unsupported tag type"),
+            else => @compileError("unreachable"),
         }
     }
 }
