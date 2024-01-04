@@ -84,16 +84,18 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
             error.EndOfStream => break,
             else => return err,
         };
-        if (TagType == XmlTag.StartTag and ch == '/') {
-            if (stream.pos == buffer.len) {
+        if (stream.pos == buffer.len) switch (TagType) {
+            XmlTag.StartTag => if (ch == '/') {
                 tag.self_close = true;
                 break;
-            }
-            return error.InvalidChar;
-        }
-        if (TagType == XmlTag.XmlDecl and ch == '?') {
-            break;
-        }
+            } else return error.InvalidChar,
+
+            XmlTag.XmlDecl => if (ch == '?')
+                break
+            else
+                return error.InvalidChar,
+            else => @compileError("unreachable"),
+        };
         try stream.seekBy(-1);
 
         const attrname_start = stream.pos;
