@@ -321,6 +321,7 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype) !XmlTree {
                         try element_stack.append(&tree.root.?);
                     }
                 }
+                tag.attributes.deinit(allocator);
             },
             .end_tag => |*tag| {
                 const top: *XmlTree.Element = element_stack.getLastOrNull() orelse return error.UnexpectedEndTag;
