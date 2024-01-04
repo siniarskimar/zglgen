@@ -205,3 +205,143 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
         },
     }
 }
+
+pub const XmlTree = struct {
+    allocator: std.mem.Allocator,
+    xml_decl: ?XmlTag.XmlDecl = null,
+    root: ?Element = null,
+
+    pub const Element = struct {
+        name: []const u8,
+        attributes: std.StringHashMapUnmanaged([]const u8) = .{},
+        content: std.ArrayListUnmanaged(TextOrElement) = .{},
+
+        const TextOrElement = union(enum) {
+            element: Element,
+            text: []const u8,
+        };
+
+        pub fn deinit(self: *Element, allocator: std.mem.Allocator) void {
+            {
+                var it = self.attributes.valueIterator();
+                while (it.next()) |v| {
+                    allocator.free(v.*);
+                }
+            }
+            {
+                var it = self.attributes.keyIterator();
+                while (it.next()) |k| {
+                    allocator.free(k.*);
+                }
+            }
+            self.attributes.deinit(allocator);
+
+            for (self.content.items) |*content| switch (content.*) {
+                .element => |*elem| elem.deinit(allocator),
+                .text => |*t| allocator.free(t.*),
+            };
+            self.content.deinit(allocator);
+
+            allocator.free(self.name);
+        }
+    };
+
+    pub fn deinit(self: *XmlTree) void {
+        if (self.root) |*root| {
+            root.deinit(self.allocator);
+        }
+    }
+};
+
+pub fn parseXml(allocator: std.mem.Allocator, reader: anytype) !XmlTree {
+    var tree = XmlTree{ .allocator = allocator };
+    errdefer tree.deinit();
+
+    var element_stack = std.ArrayList(*XmlTree.Element).init(allocator);
+    defer element_stack.deinit();
+
+    var read_buffer = std.ArrayList(u8).init(allocator);
+    defer read_buffer.deinit();
+
+    var first_elem = true;
+
+    while (first_elem or element_stack.items.len != 0) {
+        reader.streamUntilDelimiter(read_buffer.writer(), '<', null) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        read_buffer.clearAndFree();
+        try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
+
+        // check if we are inside a comment
+        // and make sure we have read a full comment tag incase a comment contains a valid
+        // xml tag
+        // eg. <!-- <element attr1=""/> -->
+        if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
+            while (!std.mem.eql(u8, read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len], "--")) {
+                try read_buffer.append('>');
+                try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
+            }
+        }
+
+        var xml_tag = try parseXmlTag(allocator, read_buffer.items);
+
+        switch (xml_tag) {
+            .xml_decl => |tag| {
+                if (tree.xml_decl != null) return error.MultipleXmlDecl;
+                tree.xml_decl = tag;
+            },
+            .start_tag => |*tag| {
+                first_elem = false;
+                var elem = XmlTree.Element{
+                    .name = try allocator.dupe(u8, tag.name),
+                };
+
+                var it = tag.attributes.iterator();
+                while (it.next()) |pair| {
+                    const key = try allocator.dupe(u8, pair.key_ptr.*);
+                    const value = try allocator.dupe(u8, pair.value_ptr.*);
+                    try elem.attributes.put(allocator, key, value);
+                }
+
+                const maybe_top: ?*XmlTree.Element = element_stack.getLastOrNull();
+
+                if (maybe_top) |top| {
+                    try top.content.append(allocator, .{ .element = elem });
+                    var ptr = &top.content.items[top.content.items.len - 1];
+                    if (!tag.self_close) {
+                        try element_stack.append(&(ptr.element));
+                    }
+                } else {
+                    tree.root = elem;
+                    if (!tag.self_close) {
+                        try element_stack.append(&tree.root.?);
+                    }
+                }
+            },
+            .end_tag => |*tag| {
+                const top: *XmlTree.Element = element_stack.getLastOrNull() orelse return error.UnexpectedEndTag;
+
+                if (!std.mem.eql(u8, top.name, tag.name)) return error.EndTagMismatch;
+                _ = element_stack.pop();
+            },
+            .comment => {},
+        }
+    }
+
+    if (element_stack.items.len != 0) return error.UnenclosedTags;
+    return tree;
+}
+
+test "attributes" {
+    const buffer =
+        \\<?xml version="1.0"?>
+        \\<root><tag1 attr1="value1"/></root>
+    ;
+    var stream = std.io.fixedBufferStream(buffer);
+    var tree = try parseXml(std.testing.allocator, stream.reader());
+    defer tree.deinit();
+    const attr1 = tree.root.?.content.items[0].element.attributes.get("attr1") orelse return error.NoAttribute;
+
+    try std.testing.expectEqualSlices(u8, "value1", attr1);
+}
