@@ -113,8 +113,8 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
         try reader.skipUntilDelimiterOrEof(quote);
         const attrvalue_len = stream.pos - attrvalue_start;
 
-        const attrname = buffer[attrname_start .. attrname_start + attrname_len];
-        const attrvalue = buffer[attrvalue_start .. attrvalue_start + attrvalue_len];
+        const attrname = buffer[attrname_start .. attrname_start + attrname_len - 1];
+        const attrvalue = buffer[attrvalue_start .. attrvalue_start + attrvalue_len - 1];
         switch (TagType) {
             XmlTag.StartTag => try tag.attributes.put(allocator, attrname, attrvalue),
             XmlTag.XmlDecl => {
