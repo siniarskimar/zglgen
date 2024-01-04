@@ -36,7 +36,7 @@ fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
                 b[0] = c;
             }
         },
-        else => return error.InvalidChar,
+        else => return error.InvalidNameChar,
     }
     var idx: usize = 1;
     while (true) {
