@@ -187,14 +187,14 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
             }
             try stream.seekBy(-1);
             const name_len = readXmlName(reader, null) catch |err| switch (err) {
-                error.EndOfStream => buffer.len,
+                error.EndOfStream => buffer.len + 1,
                 error.InvalidChar => if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/')
-                    buffer.len - 1
+                    buffer.len
                 else
                     return err,
                 else => return err,
             };
-            const name = buffer[0..name_len];
+            const name = buffer[0 .. name_len - 1];
 
             // <element attr="v1" .. > or <element attr="v1" .. />
             var tag = XmlTag.StartTag{ .name = name, .self_close = false };
