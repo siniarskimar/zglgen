@@ -140,15 +140,29 @@ pub fn parseRegistry(
                 std.debug.print("<?xml version='{}.{}'?>", .{ tag.version.major, tag.version.minor });
             },
             .start_tag => |*tag| {
-                std.debug.print("<{s}> {}\n", .{ tag.name, tag.self_close });
-                tag.deinit(allocator);
+                defer tag.deinit(allocator);
+                // std.debug.print("{s}\n", .{tag.name});
                 const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
                 if (!tag.self_close) {
                     try element_stack.append(.{ .tag = elemtag });
                 }
+                if (element_stack.getLastOrNull()) |top| {
+                    switch (top.tag) {
+                        .enums => {
+                            if (elemtag == .@"enum") {
+                                const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
+                                const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
+
+                                std.debug.print("pub const {s}: u32 = {s}\n", .{ name, value });
+                            }
+                        },
+                        else => {
+                            // unreachable
+                        },
+                    }
+                }
             },
             .end_tag => |*tag| {
-                std.debug.print("</{s}>\n", .{tag.name});
                 const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
 
                 if (element_stack.getLastOrNull()) |element| {
