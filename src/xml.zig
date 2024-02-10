@@ -258,7 +258,7 @@ pub const XmlTree = struct {
     }
 };
 
-pub fn parseXml(allocator: std.mem.Allocator, reader: anytype) !XmlTree {
+pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.StartTag) !XmlTree {
     var tree = XmlTree{ .allocator = allocator };
     errdefer tree.deinit();
 
@@ -268,14 +268,49 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype) !XmlTree {
     var read_buffer = std.ArrayList(u8).init(allocator);
     defer read_buffer.deinit();
 
+    var text_buffer = std.ArrayList(u8).init(allocator);
+    defer text_buffer.deinit();
+
     var first_elem = true;
 
+    if (root) |_| {
+        first_elem = false;
+
+        var elem = XmlTree.Element{
+            .name = try allocator.dupe(u8, root.?.name),
+        };
+
+        var it = root.?.attributes.iterator();
+        while (it.next()) |pair| {
+            const key = try allocator.dupe(u8, pair.key_ptr.*);
+            const value = try allocator.dupe(u8, pair.value_ptr.*);
+            try elem.attributes.put(allocator, key, value);
+        }
+        tree.root = elem;
+        if (root.?.self_close) {
+            return tree;
+        }
+        try element_stack.append(&(tree.root.?));
+    }
+
     while (first_elem or element_stack.items.len != 0) {
-        reader.streamUntilDelimiter(read_buffer.writer(), '<', null) catch |err| switch (err) {
+        reader.streamUntilDelimiter(text_buffer.writer(), '<', null) catch |err| switch (err) {
             error.EndOfStream => break,
             else => return err,
         };
-        read_buffer.clearAndFree();
+
+        if (element_stack.getLastOrNull()) |top| {
+            const text = try text_buffer.toOwnedSlice();
+            if (std.mem.trim(u8, text, "\n\t\r ").len != 0) {
+                try top.content.append(allocator, .{ .text = text });
+            } else {
+                allocator.free(text);
+            }
+        } else {
+            text_buffer.clearRetainingCapacity();
+        }
+
+        read_buffer.clearRetainingCapacity();
         try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
 
         // check if we are inside a comment
@@ -344,7 +379,7 @@ test "xml_decl" {
             \\<?xml version="1.0"?>
         ;
         var stream = std.io.fixedBufferStream(buffer);
-        var tree = try parseXml(std.testing.allocator, stream.reader());
+        var tree = try parseXml(std.testing.allocator, stream.reader(), null);
         defer tree.deinit();
 
         try std.testing.expect(tree.root == null);
@@ -356,7 +391,7 @@ test "xml_decl" {
             \\<?xml version="9.2"?>
         ;
         var stream = std.io.fixedBufferStream(buffer);
-        var tree = try parseXml(std.testing.allocator, stream.reader());
+        var tree = try parseXml(std.testing.allocator, stream.reader(), null);
         defer tree.deinit();
 
         try std.testing.expect(tree.root == null);
@@ -373,7 +408,7 @@ test "attributes" {
         \\</root>
     ;
     var stream = std.io.fixedBufferStream(buffer);
-    var tree = try parseXml(std.testing.allocator, stream.reader());
+    var tree = try parseXml(std.testing.allocator, stream.reader(), null);
     defer tree.deinit();
     const attr1 = tree.root.?.content.items[0].element.attributes.get("attr1") orelse return error.NoAttribute;
 
