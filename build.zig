@@ -22,10 +22,23 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // zig builr run
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const test_step = b.step("test", "Run unit tests");
+
+    const tests = [_]*std.Build.Step.Compile{
+        b.addTest(.{
+            .root_source_file = .{ .path = "src/xml.zig" },
+            .target = target,
+            .optimize = optimize,
+        }),
+    };
+
+    for (tests) |t| {
+        const run = b.addRunArtifact(t);
+        test_step.dependOn(&run.step);
+    }
     // const exe_unit_tests = b.addTest(.{
     //     .root_source_file = .{ .path = "src/main.zig" },
     //     .target = target,
