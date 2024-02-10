@@ -1,12 +1,12 @@
 const std = @import("std");
 
-const XmlTag = union(enum) {
+pub const XmlTag = union(enum) {
     xml_decl: XmlDecl,
     start_tag: StartTag,
     end_tag: EndTag,
     comment,
 
-    const StartTag = struct {
+    pub const StartTag = struct {
         name: []const u8,
         self_close: bool,
         attributes: std.StringHashMapUnmanaged([]const u8) = .{},
@@ -16,11 +16,11 @@ const XmlTag = union(enum) {
         }
     };
 
-    const EndTag = struct {
+    pub const EndTag = struct {
         name: []const u8,
     };
 
-    const XmlDecl = struct {
+    pub const XmlDecl = struct {
         version: std.SemanticVersion = std.SemanticVersion{ .major = 1, .minor = 0, .patch = 0 },
     };
 };
@@ -94,7 +94,7 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
                 break
             else
                 return error.InvalidChar,
-            else => @compileError("unreachable"),
+            else => unreachable,
         };
         try stream.seekBy(-1);
 
@@ -130,7 +130,7 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
                     tag.version = std.SemanticVersion{ .major = major, .minor = minor, .patch = 0 };
                 }
             },
-            else => @compileError("unreachable"),
+            else => unreachable,
         }
     }
 }
@@ -261,6 +261,74 @@ pub const XmlTree = struct {
             };
         }
 
+        pub fn collectTextBefore(self: @This(), child: *@This(), writer: anytype) !void {
+            for (self.content.items) |content| switch (content) {
+                .element => |*elem| {
+                    if (elem == child) {
+                        break;
+                    }
+                    try elem.collectText(writer);
+                },
+                .text => |text| {
+                    try writer.writeAll(text);
+                },
+            };
+        }
+
+        const ElementIterator = struct {
+            index: usize,
+            element: *Element,
+
+            pub fn next(self: *@This()) ?*Element {
+                while (true) {
+                    if (self.index >= self.element.content.items.len) {
+                        return null;
+                    }
+                    switch (self.element.content.items[self.index]) {
+                        .element => |*elem| {
+                            self.index += 1;
+                            return elem;
+                        },
+                        else => {
+                            self.index += 1;
+                        },
+                    }
+                }
+            }
+        };
+
+        pub fn elementIterator(self: *@This()) ElementIterator {
+            return .{ .index = 0, .element = self };
+        }
+
+        /// Finds first child element with specified `name`
+        pub fn findElement(self: *@This(), name: []const u8) ?*Element {
+            var it = self.elementIterator();
+            while (it.next()) |element| {
+                if (std.mem.eql(u8, element.name, name)) {
+                    return element;
+                }
+            }
+            return null;
+        }
+
+        const FindElementsIterator = struct {
+            inner: ElementIterator,
+            name: []const u8,
+
+            pub fn next(self: *@This()) ?*Element {
+                while (self.inner.next()) |elem| {
+                    if (std.mem.eql(u8, elem.name, self.name)) {
+                        return elem;
+                    }
+                }
+                return null;
+            }
+        };
+
+        pub fn findElements(self: *@This(), name: []const u8) FindElementsIterator {
+            return .{ .inner = self.elementIterator(), .name = name };
+        }
     };
 
     pub fn deinit(self: *XmlTree) void {

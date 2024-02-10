@@ -35,11 +35,13 @@ const ElementTag = enum {
 };
 
 pub const Registry = struct {
+    allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     enumgroups: std.StringHashMapUnmanaged(EnumGroup) = .{},
     enums: std.StringHashMapUnmanaged(Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
+    extensions: std.StringHashMapUnmanaged(void) = .{},
 
     const EnumGroup = struct {
         bitmask: bool = false,
@@ -55,6 +57,7 @@ pub const Registry = struct {
     const Command = struct {
         name: []const u8,
         return_type: []const u8,
+        params: std.ArrayListUnmanaged(Param) = .{},
 
         const Param = struct {
             name: []const u8,
@@ -72,21 +75,155 @@ pub const Registry = struct {
         name: []const u8,
         number: std.SemanticVersion,
     };
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        return .{
+            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.arena.deinit();
+    }
 };
 
+fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
+    const arena_allocator = registry.arena.allocator();
+
+    const proto = tree.root.?.findElement("proto") orelse
+        return error.CommandWithoutProto;
+
+    const return_type_elem = proto.findElement("ptype");
+
+    const name_elem = proto.findElement("name") orelse
+        return error.CommandWithoutName;
+
+    var buffer = std.ArrayList(u8).init(arena_allocator);
+    defer buffer.deinit();
+
+    try name_elem.collectText(buffer.writer());
+
+    const cmd_name = try buffer.toOwnedSlice();
+
+    if (return_type_elem) |elem| {
+        try elem.collectText(buffer.writer());
+    } else {
+        try buffer.appendSlice("void");
+    }
+
+    const return_type = try buffer.toOwnedSlice();
+
+    var cmd = Registry.Command{
+        .name = cmd_name,
+        .return_type = return_type,
+    };
+
+    var param_it = tree.root.?.findElements("param");
+    while (param_it.next()) |param_elem| {
+        const param_group = param_elem.attributes.get("group");
+        _ = param_group;
+        const param_name_elem = param_elem.findElement("name") orelse
+            return error.CommandParamWithoutName;
+
+        try param_name_elem.collectText(buffer.writer());
+        const param_name = try buffer.toOwnedSlice();
+
+        if (param_elem.findElement("ptype")) |param_type| {
+            try param_type.collectText(buffer.writer());
+        } else {
+            try param_elem.collectTextBefore(param_name_elem, buffer.writer());
+        }
+
+        const param_type = try buffer.toOwnedSlice();
+
+        try cmd.params.append(arena_allocator, .{
+            .name = param_name,
+            .type = param_type,
+            .group = null,
+        });
+    }
+
+    try registry.commands.putNoClobber(arena_allocator, cmd.name, cmd);
+}
+
+pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
+    const arena_allocator = registry.arena.allocator();
+
+    const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
+    const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
+    const maybe_groups = tag.attributes.get("group");
+
+    var en = Registry.Enum{
+        .name = try arena_allocator.dupe(u8, name),
+        .value = 0,
+    };
+
+    en.value = std.fmt.parseInt(usize, value, 0) catch |err| switch (err) {
+        error.Overflow => blk: {
+            const v = try std.fmt.parseInt(isize, value, 0);
+            en.signed = true;
+            break :blk @bitCast(v);
+        },
+        else => return err,
+    };
+
+    if (maybe_groups) |groups| {
+        var it = std.mem.splitScalar(u8, groups, ',');
+        while (it.next()) |group| {
+            if (registry.enumgroups.getKey(group)) |key| {
+                try en.groups.append(arena_allocator, key);
+                continue;
+            }
+
+            const copy = try arena_allocator.dupe(u8, group);
+            try registry.enumgroups.putNoClobber(arena_allocator, copy, .{ .bitmask = false });
+            try en.groups.append(arena_allocator, copy);
+        }
+    }
+
+    try registry.enums.put(arena_allocator, en.name, en);
+}
+
+pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
+    const arena_allocator = registry.arena.allocator();
+
+    const group = tag.attributes.get("group") orelse return;
+    const bitmask = if (tag.attributes.get("type")) |attr_type|
+        std.mem.eql(u8, attr_type, "bitmask")
+    else
+        false;
+
+    if (registry.enumgroups.getPtr(group)) |egroup| {
+        egroup.bitmask = bitmask;
+        return;
+    }
+
+    const egroup = Registry.EnumGroup{
+        .bitmask = bitmask,
+    };
+
+    try registry.enumgroups.putNoClobber(
+        arena_allocator,
+        try arena_allocator.dupe(u8, group),
+        egroup,
+    );
+}
+
+pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
+    const arena_allocator = registry.arena.allocator();
+    const tag = tree.root.?;
+    const name = tag.attributes.get("name") orelse return error.ExtensionWithoutName;
+
+    try registry.extensions.putNoClobber(arena_allocator, try arena_allocator.dupe(u8, name), {});
+}
+
 pub fn parseRegistry(
-    arena_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
     reader: anytype,
-    options: struct {
-        core: bool = false,
-    },
 ) !Registry {
-    _ = options;
-
-    var registry = Registry{
-        .arena = std.heap.ArenaAllocator.init(arena_allocator),
-    };
+    var registry = Registry.init(allocator);
+    errdefer registry.deinit();
 
     const TagOrElement = union(enum) {
         tag: ElementTag,
@@ -154,28 +291,7 @@ pub fn parseRegistry(
 
                 if (parent) |top| switch (top.getTag()) {
                     .registry => switch (elemtag) {
-                        .enums => {
-                            const group = tag.attributes.get("group") orelse continue;
-                            const bitmask = if (tag.attributes.get("type")) |attr_type|
-                                std.mem.eql(u8, attr_type, "bitmask")
-                            else
-                                false;
-
-                            if (registry.enumgroups.getPtr(group)) |egroup| {
-                                egroup.bitmask = bitmask;
-                                continue;
-                            }
-
-                            const egroup = Registry.EnumGroup{
-                                .bitmask = bitmask,
-                            };
-
-                            try registry.enumgroups.putNoClobber(
-                                arena_allocator,
-                                try arena_allocator.dupe(u8, group),
-                                egroup,
-                            );
-                        },
+                        .enums => try extractEnumGroup(&registry, tag),
                         .feature => {
                             var tree = try xml.parseXml(allocator, reader, tag.*);
                             defer tree.deinit();
@@ -185,66 +301,17 @@ pub fn parseRegistry(
                         else => {},
                     },
                     .enums => switch (elemtag) {
-                        .@"enum" => {
-                            const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
-                            const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
-                            const maybe_groups = tag.attributes.get("group");
-
-                            var en = Registry.Enum{
-                                .name = try arena_allocator.dupe(u8, name),
-                                .value = 0,
-                            };
-
-                            en.value = std.fmt.parseInt(usize, value, 0) catch |err| switch (err) {
-                                error.Overflow => blk: {
-                                    const v = try std.fmt.parseInt(isize, value, 0);
-                                    en.signed = true;
-                                    break :blk @bitCast(v);
-                                },
-                                else => return err,
-                            };
-
-                            if (maybe_groups) |groups| {
-                                var it = std.mem.splitScalar(u8, groups, ',');
-                                while (it.next()) |group| {
-                                    if (registry.enumgroups.getKey(group)) |key| {
-                                        try en.groups.append(arena_allocator, key);
-                                        continue;
-                                    }
-
-                                    const copy = try arena_allocator.dupe(u8, group);
-                                    try registry.enumgroups.putNoClobber(arena_allocator, copy, .{ .bitmask = false });
-                                    try en.groups.append(arena_allocator, copy);
-                                }
-                            }
-
-                            try registry.enums.put(arena_allocator, en.name, en);
-                        },
+                        .@"enum" => try extractEnum(&registry, tag),
                         .unused => {},
-                        else => unreachable,
-                    },
-                    .types => switch (elemtag) {
-                        .type => {
-                            var fba_buffer = [_]u8{0} ** 2048;
-                            var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
-
-                            var tree = try xml.parseXml(fba.allocator(), reader, tag.*);
-                            defer tree.deinit();
-                            // var text = std.ArrayList(u8).init(allocator);
-                            // defer text.deinit();
-
-                            // try tree.root.?.collectText(text.writer());
-
-                            _ = element_stack.pop();
-                        },
                         else => unreachable,
                     },
                     .commands => switch (elemtag) {
                         .command => {
                             var tree = try xml.parseXml(allocator, reader, tag.*);
                             defer tree.deinit();
+                            defer _ = element_stack.pop();
 
-                            _ = element_stack.pop();
+                            try extractCommand(&registry, &tree);
                         },
                         else => unreachable,
                     },
@@ -255,8 +322,9 @@ pub fn parseRegistry(
                             }
                             var tree = try xml.parseXml(allocator, reader, tag.*);
                             defer tree.deinit();
+                            defer _ = element_stack.pop();
 
-                            _ = element_stack.pop();
+                            try extractExtension(&registry, &tree);
                         },
                         else => unreachable,
                     },
@@ -331,11 +399,14 @@ pub fn main() !void {
     var registry_buffer_stream = std.io.fixedBufferStream(registry_buffer);
 
     var registry = try parseRegistry(
-        arena.allocator(),
         gpalloc.allocator(),
         registry_buffer_stream.reader(),
-        .{},
     );
 
-    std.debug.print("enum groups: {}, enums: {}\n", .{ registry.enumgroups.size, registry.enums.size });
+    std.debug.print("enum groups: {}, enums: {}, commands: {}, extensions: {}\n", .{
+        registry.enumgroups.size,
+        registry.enums.size,
+        registry.commands.size,
+        registry.extensions.size,
+    });
 }
