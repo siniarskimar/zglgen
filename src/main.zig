@@ -34,46 +34,44 @@ const ElementTag = enum {
     remove,
 };
 
-const Element = struct {
-    tag: ElementTag,
-    attributes: std.StringHashMapUnmanaged([]const u8) = .{},
-    content: std.ArrayListUnmanaged(Content) = .{},
+pub const Registry = struct {
+    arena: std.heap.ArenaAllocator,
+    enumgroups: std.StringHashMapUnmanaged(EnumGroup) = .{},
+    enums: std.StringHashMapUnmanaged(Enum) = .{},
+    commands: std.StringHashMapUnmanaged(Command) = .{},
+    types: std.StringHashMapUnmanaged(Type) = .{},
 
-    const Content = union(enum) {
-        element: Element,
-        text: []const u8,
+    const EnumGroup = struct {
+        bitmask: bool = false,
     };
 
-    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        for (self.content.items) |*content| switch (content.*) {
-            .element => content.element.deinit(allocator),
-            .text => allocator.free(content.text),
-        };
-        self.content.deinit(allocator);
-
-        {
-            var it = self.attributes.keyIterator();
-            while (it.next()) |key| {
-                allocator.free(key.*);
-            }
-        }
-        {
-            var it = self.attributes.valueIterator();
-            while (it.next()) |value| {
-                allocator.free(value.*);
-            }
-        }
-        self.attributes.deinit(allocator);
-    }
-};
-
-pub const Registry = struct {
     const Enum = struct {
         name: []const u8,
         value: usize,
+        signed: bool = false,
+        groups: std.ArrayListUnmanaged([]const u8) = .{},
     };
-    const Command = struct {};
-    const Type = struct {};
+
+    const Command = struct {
+        name: []const u8,
+        return_type: []const u8,
+
+        const Param = struct {
+            name: []const u8,
+            type: []const u8,
+            group: ?[]const u8,
+        };
+    };
+
+    const Type = struct {
+        alias: []const u8,
+        original: []const u8,
+    };
+
+    const Feature = struct {
+        name: []const u8,
+        number: std.SemanticVersion,
+    };
 };
 
 pub fn parseRegistry(
@@ -84,17 +82,20 @@ pub fn parseRegistry(
         core: bool = false,
     },
 ) !Registry {
-    _ = arena_allocator;
     _ = options;
+
+    var registry = Registry{
+        .arena = std.heap.ArenaAllocator.init(arena_allocator),
+    };
 
     const TagOrElement = union(enum) {
         tag: ElementTag,
-        element: Element,
+        element: xml.XmlTree.Element,
 
         fn getTag(self: @This()) ElementTag {
             return switch (self) {
                 .tag => |t| t,
-                .element => self.tag,
+                .element => |element| std.meta.stringToEnum(ElementTag, element.name).?,
             };
         }
 
@@ -117,15 +118,19 @@ pub fn parseRegistry(
             error.EndOfStream => break,
             else => return err,
         };
-        read_buffer.clearAndFree();
+        read_buffer.clearRetainingCapacity();
         try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
 
         // check if we are inside a comment
-        // and make sure we have read a full comment tag incase a comment contains a valid
+        // and make sure we have read a full comment tag in case a comment contains a valid
         // xml tag
         // eg. <!-- <element attr1=""/> -->
         if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
+            // BUG(zig): In 0.11.0 I can't break up the following
+            // std.mem.eql because it causes a miscompilation and a segfault
+
             while (!std.mem.eql(u8, read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len], "--")) {
+                try read_buffer.append('>');
                 try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
             }
         }
@@ -137,30 +142,126 @@ pub fn parseRegistry(
                     std.debug.print("(xml) Unsupported XML version\n", .{});
                     return error.UnsupportedVersion;
                 }
-                std.debug.print("<?xml version='{}.{}'?>", .{ tag.version.major, tag.version.minor });
             },
             .start_tag => |*tag| {
                 defer tag.deinit(allocator);
-                // std.debug.print("{s}\n", .{tag.name});
                 const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
+                const parent = element_stack.getLastOrNull();
+
                 if (!tag.self_close) {
                     try element_stack.append(.{ .tag = elemtag });
                 }
-                if (element_stack.getLastOrNull()) |top| {
-                    switch (top.tag) {
-                        .enums => {
-                            if (elemtag == .@"enum") {
-                                const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
-                                const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
 
-                                std.debug.print("pub const {s}: u32 = {s}\n", .{ name, value });
+                if (parent) |top| switch (top.getTag()) {
+                    .registry => switch (elemtag) {
+                        .enums => {
+                            const group = tag.attributes.get("group") orelse continue;
+                            const bitmask = if (tag.attributes.get("type")) |attr_type|
+                                std.mem.eql(u8, attr_type, "bitmask")
+                            else
+                                false;
+
+                            if (registry.enumgroups.getPtr(group)) |egroup| {
+                                egroup.bitmask = bitmask;
+                                continue;
                             }
+
+                            const egroup = Registry.EnumGroup{
+                                .bitmask = bitmask,
+                            };
+
+                            try registry.enumgroups.putNoClobber(
+                                arena_allocator,
+                                try arena_allocator.dupe(u8, group),
+                                egroup,
+                            );
                         },
-                        else => {
-                            // unreachable
+                        .feature => {
+                            var tree = try xml.parseXml(allocator, reader, tag.*);
+                            defer tree.deinit();
+
+                            _ = element_stack.pop();
                         },
-                    }
-                }
+                        else => {},
+                    },
+                    .enums => switch (elemtag) {
+                        .@"enum" => {
+                            const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
+                            const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
+                            const maybe_groups = tag.attributes.get("group");
+
+                            var en = Registry.Enum{
+                                .name = try arena_allocator.dupe(u8, name),
+                                .value = 0,
+                            };
+
+                            en.value = std.fmt.parseInt(usize, value, 0) catch |err| switch (err) {
+                                error.Overflow => blk: {
+                                    const v = try std.fmt.parseInt(isize, value, 0);
+                                    en.signed = true;
+                                    break :blk @bitCast(v);
+                                },
+                                else => return err,
+                            };
+
+                            if (maybe_groups) |groups| {
+                                var it = std.mem.splitScalar(u8, groups, ',');
+                                while (it.next()) |group| {
+                                    if (registry.enumgroups.getKey(group)) |key| {
+                                        try en.groups.append(arena_allocator, key);
+                                        continue;
+                                    }
+
+                                    const copy = try arena_allocator.dupe(u8, group);
+                                    try registry.enumgroups.putNoClobber(arena_allocator, copy, .{ .bitmask = false });
+                                    try en.groups.append(arena_allocator, copy);
+                                }
+                            }
+
+                            try registry.enums.put(arena_allocator, en.name, en);
+                        },
+                        .unused => {},
+                        else => unreachable,
+                    },
+                    .types => switch (elemtag) {
+                        .type => {
+                            var fba_buffer = [_]u8{0} ** 2048;
+                            var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
+
+                            var tree = try xml.parseXml(fba.allocator(), reader, tag.*);
+                            defer tree.deinit();
+                            // var text = std.ArrayList(u8).init(allocator);
+                            // defer text.deinit();
+
+                            // try tree.root.?.collectText(text.writer());
+
+                            _ = element_stack.pop();
+                        },
+                        else => unreachable,
+                    },
+                    .commands => switch (elemtag) {
+                        .command => {
+                            var tree = try xml.parseXml(allocator, reader, tag.*);
+                            defer tree.deinit();
+
+                            _ = element_stack.pop();
+                        },
+                        else => unreachable,
+                    },
+                    .extensions => switch (elemtag) {
+                        .extension => {
+                            if (tag.self_close) {
+                                continue;
+                            }
+                            var tree = try xml.parseXml(allocator, reader, tag.*);
+                            defer tree.deinit();
+
+                            _ = element_stack.pop();
+                        },
+                        else => unreachable,
+                    },
+                    else => {},
+                };
             },
             .end_tag => |*tag| {
                 const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
@@ -176,7 +277,7 @@ pub fn parseRegistry(
             .comment => {},
         }
     }
-    return .{};
+    return registry;
 }
 
 fn printHelp(params: []const clap.Param(clap.Help)) !void {
@@ -229,10 +330,12 @@ pub fn main() !void {
 
     var registry_buffer_stream = std.io.fixedBufferStream(registry_buffer);
 
-    _ = try parseRegistry(
+    var registry = try parseRegistry(
         arena.allocator(),
         gpalloc.allocator(),
         registry_buffer_stream.reader(),
         .{},
     );
+
+    std.debug.print("enum groups: {}, enums: {}\n", .{ registry.enumgroups.size, registry.enums.size });
 }

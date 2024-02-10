@@ -249,6 +249,18 @@ pub const XmlTree = struct {
 
             allocator.free(self.name);
         }
+
+        pub fn collectText(self: Element, writer: anytype) !void {
+            for (self.content.items) |content| switch (content) {
+                .element => |elem| {
+                    try elem.collectText(writer);
+                },
+                .text => |text| {
+                    try writer.writeAll(text);
+                },
+            };
+        }
+
     };
 
     pub fn deinit(self: *XmlTree) void {
