@@ -347,10 +347,11 @@ pub fn parseRegistry(
         // xml tag
         // eg. <!-- <element attr1=""/> -->
         if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
-            // BUG(zig): In 0.11.0 I can't break up the following
-            // std.mem.eql because it causes a miscompilation and a segfault
-
-            while (!std.mem.eql(u8, read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len], "--")) {
+            while (true) {
+                const last_2chars = read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len];
+                if (std.mem.eql(u8, last_2chars, "--")) {
+                    break;
+                }
                 try read_buffer.append('>');
                 try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
             }
