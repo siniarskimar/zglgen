@@ -15,9 +15,7 @@ pub fn main() !void {
         \\<file>               File path to OpenGL registry
     );
     var gpalloc = std.heap.GeneralPurposeAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer _ = gpalloc.deinit();
-    defer arena.deinit();
 
     const parsers = comptime .{
         .str = clap.parsers.string,
@@ -56,6 +54,7 @@ pub fn main() !void {
         gpalloc.allocator(),
         registry_buffer_stream.reader(),
     );
+    defer registry.deinit();
 
     std.debug.print("enum groups: {}, enums: {}, commands: {}, extensions: {}\n", .{
         registry.enumgroups.size,
