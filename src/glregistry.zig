@@ -41,6 +41,7 @@ pub const Registry = struct {
     commands: std.StringHashMapUnmanaged(Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
     extensions: std.StringHashMapUnmanaged(void) = .{},
+    features: std.ArrayListUnmanaged(Feature) = .{},
 
     const EnumGroup = struct {
         bitmask: bool = false,
@@ -71,8 +72,23 @@ pub const Registry = struct {
     };
 
     const Feature = struct {
-        name: []const u8,
+        api: Api,
         number: std.SemanticVersion,
+        require_set: std.ArrayListUnmanaged(Requirement) = .{},
+        remove_set: std.ArrayListUnmanaged(Requirement) = .{},
+
+        const Api = enum {
+            gl,
+            gles1,
+            gles2,
+            glsc2,
+        };
+    };
+
+    const Requirement = union(enum) {
+        @"enum": []const u8,
+        command: []const u8,
+        type: []const u8,
     };
 
     pub fn init(allocator: std.mem.Allocator) @This() {
@@ -217,6 +233,75 @@ pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
     try registry.extensions.putNoClobber(arena_allocator, try arena_allocator.dupe(u8, name), {});
 }
 
+pub fn extractRequirement(elem: *xml.XmlTree.Element) !Registry.Requirement {
+    const RequirementEnum = @typeInfo(Registry.Requirement).Union.tag_type.?;
+
+    const name = elem.attributes.get("name") orelse return error.RequirementWithoutName;
+
+    const component = std.meta.stringToEnum(RequirementEnum, elem.name) orelse {
+        std.debug.print("{s}\n", .{name});
+        return error.UnknownRequirement;
+    };
+
+    return switch (component) {
+        .@"enum" => .{ .@"enum" = name },
+        .command => .{ .command = name },
+        .type => .{ .type = name },
+    };
+}
+
+pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
+    const arena_allocator = registry.arena.allocator();
+    var tag = tree.root.?;
+    const api_attr = tag.attributes.get("api") orelse return error.FeatureWithoutApi;
+    const number = tag.attributes.get("number") orelse return error.FeatureWithoutNumber;
+
+    const api = if (std.mem.eql(u8, api_attr, "gl"))
+        Registry.Feature.Api.gl
+    else if (std.mem.eql(u8, api_attr, "gles1"))
+        Registry.Feature.Api.gles2
+    else if (std.mem.eql(u8, api_attr, "gles2"))
+        Registry.Feature.Api.gles2
+    else if (std.mem.eql(u8, api_attr, "glsc2"))
+        Registry.Feature.Api.glsc2
+    else {
+        std.debug.print("{s}\n", .{api_attr});
+        return error.UnsupportedFeatureApi;
+    };
+
+    var number_it = std.mem.splitScalar(u8, number, '.');
+    const version = std.SemanticVersion{
+        .major = try std.fmt.parseInt(usize, number_it.next() orelse "0", 10),
+        .minor = try std.fmt.parseInt(usize, number_it.next() orelse "0", 10),
+        .patch = try std.fmt.parseInt(usize, number_it.next() orelse "0", 10),
+    };
+
+    var feature = Registry.Feature{
+        .api = api,
+        .number = version,
+    };
+
+    _ = std.builtin.Type;
+
+    var require_it = tag.findElements("require");
+    while (require_it.next()) |require_elem| {
+        var it = require_elem.elementIterator();
+        while (it.next()) |component_elem| {
+            try feature.require_set.append(arena_allocator, try extractRequirement(component_elem));
+        }
+    }
+
+    var remove_it = tag.findElements("remove");
+    while (remove_it.next()) |remove_elem| {
+        var it = remove_elem.elementIterator();
+        while (it.next()) |component_elem| {
+            try feature.remove_set.append(arena_allocator, try extractRequirement(component_elem));
+        }
+    }
+
+    try registry.features.append(arena_allocator, feature);
+}
+
 pub fn parseRegistry(
     allocator: std.mem.Allocator,
     reader: anytype,
@@ -294,8 +379,9 @@ pub fn parseRegistry(
                         .feature => {
                             var tree = try xml.parseXml(allocator, reader, tag.*);
                             defer tree.deinit();
+                            defer _ = element_stack.pop();
 
-                            _ = element_stack.pop();
+                            try extractFeature(&registry, &tree);
                         },
                         else => {},
                     },
