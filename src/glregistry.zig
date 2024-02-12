@@ -233,7 +233,7 @@ pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
     try registry.extensions.putNoClobber(arena_allocator, try arena_allocator.dupe(u8, name), {});
 }
 
-pub fn extractRequirement(elem: *xml.XmlTree.Element) !Registry.Requirement {
+pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Element) !Registry.Requirement {
     const RequirementEnum = @typeInfo(Registry.Requirement).Union.tag_type.?;
 
     const name = elem.attributes.get("name") orelse return error.RequirementWithoutName;
@@ -243,10 +243,12 @@ pub fn extractRequirement(elem: *xml.XmlTree.Element) !Registry.Requirement {
         return error.UnknownRequirement;
     };
 
+    const name_copy = try allocator.dupe(u8, name);
+
     return switch (component) {
-        .@"enum" => .{ .@"enum" = name },
-        .command => .{ .command = name },
-        .type => .{ .type = name },
+        .@"enum" => .{ .@"enum" = name_copy },
+        .command => .{ .command = name_copy },
+        .type => .{ .type = name_copy },
     };
 }
 
@@ -281,13 +283,14 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
         .number = version,
     };
 
-    _ = std.builtin.Type;
-
     var require_it = tag.findElements("require");
     while (require_it.next()) |require_elem| {
         var it = require_elem.elementIterator();
         while (it.next()) |component_elem| {
-            try feature.require_set.append(arena_allocator, try extractRequirement(component_elem));
+            try feature.require_set.append(
+                arena_allocator,
+                try extractRequirement(arena_allocator, component_elem),
+            );
         }
     }
 
@@ -295,7 +298,10 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
     while (remove_it.next()) |remove_elem| {
         var it = remove_elem.elementIterator();
         while (it.next()) |component_elem| {
-            try feature.remove_set.append(arena_allocator, try extractRequirement(component_elem));
+            try feature.remove_set.append(
+                arena_allocator,
+                try extractRequirement(arena_allocator, component_elem),
+            );
         }
     }
 
