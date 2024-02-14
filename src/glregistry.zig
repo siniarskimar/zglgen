@@ -593,7 +593,7 @@ fn resolveFeatureRequirements(
     allocator: std.mem.Allocator,
     registry: *Registry,
     api: Registry.Feature.Api,
-    version: std.SemanticVersion,
+    version: ?std.SemanticVersion,
     // extensions: []Registry.Extension,
 ) !FeatureRequirements {
     registry.sortFeatures();
@@ -601,7 +601,7 @@ fn resolveFeatureRequirements(
     defer requirements.deinit();
 
     for (registry.getFeatureRange(api)) |feature| {
-        if (feature.number.order(version) == .gt) {
+        if (version != null and feature.number.order(version.?) == .gt) {
             break;
         }
         try requirements.appendSlice(feature.require_set.items);
@@ -726,7 +726,7 @@ pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
     api: Registry.Feature.Api,
-    version: std.SemanticVersion,
+    version: ?std.SemanticVersion,
     core: bool,
     writer: anytype,
 ) !void {
