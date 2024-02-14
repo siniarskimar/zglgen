@@ -1,5 +1,6 @@
 const std = @import("std");
 const clap = @import("clap");
+const builtin = @import("builtin");
 const glregistry = @import("./glregistry.zig");
 
 fn printHelp(params: []const clap.Param(clap.Help)) !void {
@@ -14,8 +15,15 @@ pub fn main() !void {
         \\-h, --help          Show this help message
         \\<file>               File path to OpenGL registry
     );
+    const use_c_allocator = builtin.link_libc and builtin.mode != .Debug;
+
     var gpalloc = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpalloc.deinit();
+
+    const gpallocator = if (use_c_allocator)
+        std.heap.c_allocator
+    else
+        gpalloc.allocator();
 
     const parsers = comptime .{
         .str = clap.parsers.string,
@@ -25,7 +33,7 @@ pub fn main() !void {
     var diag = clap.Diagnostic{};
     var res = clap.parse(clap.Help, &params, parsers, .{
         .diagnostic = &diag,
-        .allocator = gpalloc.allocator(),
+        .allocator = gpallocator,
     }) catch |err| {
         diag.report(std.io.getStdErr().writer(), err) catch {};
         return;
@@ -40,18 +48,17 @@ pub fn main() !void {
     }
 
     const cwd = std.fs.cwd();
-    const registry_buffer =
-        try cwd.readFileAlloc(
-        gpalloc.allocator(),
+    const registry_buffer = try cwd.readFileAlloc(
+        gpallocator,
         res.positionals[0],
         std.math.maxInt(usize),
     );
-    defer gpalloc.allocator().free(registry_buffer);
+    defer gpallocator.free(registry_buffer);
 
     var registry_buffer_stream = std.io.fixedBufferStream(registry_buffer);
 
     var registry = try glregistry.parseRegistry(
-        gpalloc.allocator(),
+        gpallocator,
         registry_buffer_stream.reader(),
     );
     defer registry.deinit();
@@ -71,7 +78,7 @@ pub fn main() !void {
     };
 
     try glregistry.generateModule(
-        gpalloc.allocator(),
+        gpallocator,
         &registry,
         .gl,
         .{ .major = 1, .minor = 1, .patch = 0 },
