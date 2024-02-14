@@ -336,16 +336,8 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
     const api_attr = tag.attributes.get("api") orelse return error.FeatureWithoutApi;
     const number = tag.attributes.get("number") orelse return error.FeatureWithoutNumber;
 
-    const api = if (std.mem.eql(u8, api_attr, "gl"))
-        Registry.Feature.Api.gl
-    else if (std.mem.eql(u8, api_attr, "gles1"))
-        Registry.Feature.Api.gles2
-    else if (std.mem.eql(u8, api_attr, "gles2"))
-        Registry.Feature.Api.gles2
-    else if (std.mem.eql(u8, api_attr, "glsc2"))
-        Registry.Feature.Api.glsc2
-    else {
-        std.debug.print("{s}\n", .{api_attr});
+    const api = std.meta.stringToEnum(Registry.Feature.Api, api_attr) orelse {
+        std.log.err("Unsupported api: {s}\n", .{api_attr});
         return error.UnsupportedFeatureApi;
     };
 
