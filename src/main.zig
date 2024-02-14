@@ -114,7 +114,7 @@ pub fn main() !void {
     if (res.args.help != 0) {
         return printHelp(&params);
     } else if (res.positionals.len < 1) {
-        std.debug.print("error: Insufficient number of positional arguments!\n", .{});
+        std.log.err("error: Insufficient number of positional arguments!\n", .{});
         return printHelp(&params);
     }
 
@@ -155,7 +155,12 @@ pub fn main() !void {
 
     var out_module_stream = std.io.bufferedWriter(out_module.writer());
     defer out_module_stream.flush() catch {
-        std.debug.print("Failed to flush\n", .{});
+        std.log.err(
+            "Failed to flush {s}\n",
+            .{
+                if (res.args.output) |output| output else "stdout",
+            },
+        );
     };
 
     try glregistry.generateModule(
