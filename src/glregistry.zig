@@ -654,14 +654,22 @@ fn resolveFeatureRequirements(
         }
         enumgroups.deinit(allocator);
     }
+    var free_enums_found = std.StringHashMap(void).init(allocator);
+    defer free_enums_found.deinit();
+
     var free_enums = std.ArrayListUnmanaged(Registry.Enum){};
     errdefer free_enums.deinit(allocator);
+
+    var commands_found = std.StringHashMap(void).init(allocator);
+    defer commands_found.deinit();
 
     var commands = std.ArrayListUnmanaged(Registry.Command){};
     errdefer commands.deinit(allocator);
 
     for (requirements.items) |req| switch (req) {
         .@"enum" => |ename| {
+            // TODO: Pay attention to enum's alias attribute
+
             const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
             outer: for (e.groups.items) |egroup| {
                 if (enumgroups.getPtr(egroup)) |group| {
@@ -677,12 +685,18 @@ fn resolveFeatureRequirements(
                 }
             }
             if (e.groups.items.len == 0) {
-                try free_enums.append(allocator, e);
+                const result = try free_enums_found.getOrPut(e.name);
+                if (!result.found_existing) {
+                    try free_enums.append(allocator, e);
+                }
             }
         },
         .command => |cname| {
             const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
-            try commands.append(allocator, command);
+            const dedup_result = try commands_found.getOrPut(command.name);
+            if (!dedup_result.found_existing) {
+                try commands.append(allocator, command);
+            }
         },
         .type => {},
     };
