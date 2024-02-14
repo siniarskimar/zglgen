@@ -627,12 +627,16 @@ fn resolveFeatureRequirements(
     registry: *Registry,
     api: Registry.Feature.Api,
     version: ?std.SemanticVersion,
+    core: bool,
     // extensions: []Registry.Extension,
 ) !FeatureRequirements {
     registry.sortFeatures();
     var requirements = std.ArrayList(Registry.Requirement).init(allocator);
     defer requirements.deinit();
 
+    _ = core;
+
+    // TODO: Respect core flag
     for (registry.getFeatureRange(api)) |feature| {
         if (version != null and feature.number.order(version.?) == .gt) {
             break;
@@ -768,7 +772,7 @@ pub fn generateModule(
     // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMPLE);
 
-    var requirements = try resolveFeatureRequirements(allocator, registry, api, version);
+    var requirements = try resolveFeatureRequirements(allocator, registry, api, version, core);
     defer requirements.deinit();
 
     {
@@ -789,5 +793,4 @@ pub fn generateModule(
     //     try writer.print(": GLenum = {};\n", .{e.value});
     // }
 
-    _ = core;
 }
