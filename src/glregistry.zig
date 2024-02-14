@@ -62,6 +62,7 @@ pub const Registry = struct {
         const Param = struct {
             name: []const u8,
             type: []const u8,
+            inner_type: []const u8,
             group: ?[]const u8,
         };
     };
@@ -198,7 +199,6 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
     var param_it = tree.root.?.findElements("param");
     while (param_it.next()) |param_elem| {
         const param_group = param_elem.attributes.get("group");
-        _ = param_group;
         const param_name_elem = param_elem.findElement("name") orelse
             return error.CommandParamWithoutName;
 
@@ -206,20 +206,30 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
         const param_name = try string_allocator.dupe(u8, buffer.items);
         buffer.clearRetainingCapacity();
 
-        if (param_elem.findElement("ptype")) |param_type| {
-            try param_type.collectText(buffer.writer());
-        } else {
-            try param_elem.collectTextBefore(param_name_elem, buffer.writer());
-        }
+        try param_elem.collectTextBefore(param_name_elem, buffer.writer());
 
         const param_type = try string_allocator.dupe(u8, buffer.items);
+        buffer.clearRetainingCapacity();
+
+        if (param_elem.findElement("ptype")) |ptype| {
+            try ptype.collectText(buffer.writer());
+        }
+
+        const param_inner_type = if (buffer.items.len == 0)
+            param_type
+        else
+            try string_allocator.dupe(u8, buffer.items);
         buffer.clearRetainingCapacity();
 
         // TODO: fill in group parameter
         try cmd.params.append(allocator, .{
             .name = param_name,
             .type = param_type,
-            .group = null,
+            .inner_type = param_inner_type,
+            .group = if (param_group) |group|
+                try string_allocator.dupe(u8, group)
+            else
+                null,
         });
     }
 
