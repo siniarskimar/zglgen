@@ -62,4 +62,20 @@ pub fn main() !void {
         registry.commands.size,
         registry.extensions.size,
     });
+    var out_module = try cwd.createFile("./out.zig", .{});
+    defer out_module.close();
+
+    var out_module_stream = std.io.bufferedWriter(out_module.writer());
+    defer out_module_stream.flush() catch {
+        std.debug.print("Failed to flush\n", .{});
+    };
+
+    try glregistry.generateModule(
+        gpalloc.allocator(),
+        &registry,
+        .gl,
+        .{ .major = 1, .minor = 1, .patch = 0 },
+        false,
+        out_module_stream.writer(),
+    );
 }
