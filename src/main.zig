@@ -118,6 +118,11 @@ pub fn main() !void {
         return printHelp(&params);
     }
 
+    const apispec = res.args.api orelse {
+        std.log.err("'--api' Option is required!", .{});
+        return error.MissingOption;
+    };
+
     const cwd = std.fs.cwd();
     const registry_buffer = try cwd.readFileAlloc(
         gpallocator,
@@ -156,9 +161,9 @@ pub fn main() !void {
     try glregistry.generateModule(
         gpallocator,
         &registry,
-        res.args.api.api,
-        res.args.api.version,
-        res.args.api.core,
+        apispec.api,
+        apispec.version,
+        apispec.core,
         out_module_stream.writer(),
     );
 }
