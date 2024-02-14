@@ -763,6 +763,88 @@ const MODULE_TYPE_PREAMPLE =
     \\
 ;
 
+fn translateCType(
+    allocator: std.mem.Allocator,
+    string_allocator: std.mem.Allocator,
+    ctype: []const u8,
+) ![]const u8 {
+    const ctype_trimmed = std.mem.trim(u8, ctype, " ");
+
+    if (std.mem.eql(u8, "void", ctype_trimmed)) {
+        return try string_allocator.dupe(u8, "void");
+    }
+
+    var tokens = std.ArrayList([]const u8).init(allocator);
+    defer tokens.deinit();
+
+    {
+        var it = std.mem.splitScalar(u8, ctype_trimmed, ' ');
+        while (it.next()) |dirty_token| {
+            if (dirty_token.len == 0) {
+                continue;
+            }
+            var it2 = std.mem.splitScalar(u8, dirty_token, '*');
+            while (it2.next()) |token| {
+                if (token.len == 0) {
+                    try tokens.append("*");
+                    continue;
+                }
+                try tokens.append(token);
+            }
+        }
+    }
+
+    if (std.mem.eql(u8, tokens.items[0], "const")) {
+        const idx: usize = for (tokens.items[1..], 1..) |token, idx| {
+            if (std.mem.eql(u8, token, "*")) {
+                break idx - 1;
+            }
+        } else tokens.items.len - 1;
+
+        try tokens.insert(idx, tokens.orderedRemove(0));
+    }
+
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    var idx: usize = tokens.items.len;
+    while (idx > 0) {
+        idx -= 1;
+        const token = tokens.items[idx];
+
+        // const void * => ?*anyopaque
+        // void const * => ?*anyopaque
+        // const GLenum * => [*c]
+        if (std.mem.eql(u8, token, "*")) {
+            const c1 = idx > 0 and std.mem.eql(u8, tokens.items[idx - 1], "void");
+            const c2 = idx > 1 and std.mem.eql(u8, tokens.items[idx - 2], "void");
+            if (c1 or c2) {
+                try buffer.appendSlice("?*");
+            } else {
+                try buffer.appendSlice("[*c]");
+            }
+        } else if (std.mem.eql(u8, token, "const")) {
+            try buffer.appendSlice("const ");
+        } else if (std.mem.eql(u8, token, "void")) {
+            try buffer.appendSlice("anyopaque");
+        } else if (std.mem.eql(u8, token, "int")) {
+            try buffer.appendSlice("c_int");
+        } else if (std.mem.eql(u8, token, "short")) {
+            try buffer.appendSlice("c_short");
+        } else if (std.mem.eql(u8, token, "long")) {
+            try buffer.appendSlice("c_long");
+        } else {
+            try buffer.appendSlice(token);
+        }
+    }
+
+    if (std.mem.eql(u8, buffer.items, "[*c]const GLubyte")) {
+        return try string_allocator.dupe(u8, "?[*:0]const GLubyte");
+    }
+
+    return try string_allocator.dupe(u8, buffer.items);
+}
+
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
