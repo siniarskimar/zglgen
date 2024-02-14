@@ -188,7 +188,7 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
         try buffer.appendSlice("void");
     }
 
-    const return_type = try string_allocator.dupe(u8, buffer.items);
+    const return_type = try translateCType(allocator, string_allocator, buffer.items);
     buffer.clearRetainingCapacity();
 
     var cmd = Registry.Command{
@@ -208,7 +208,7 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
 
         try param_elem.collectTextBefore(param_name_elem, buffer.writer());
 
-        const param_type = try string_allocator.dupe(u8, buffer.items);
+        const param_type = try translateCType(allocator, string_allocator, buffer.items);
         buffer.clearRetainingCapacity();
 
         if (param_elem.findElement("ptype")) |ptype| {
@@ -701,9 +701,37 @@ fn writeProcedureTable(
     writer: anytype,
 ) !void {
     try writer.writeAll("pub const ProcTable = struct {\n");
+
+    for (commands.items) |command| {
+        try writer.print("{s}: ?*", .{command.name});
+
+        for (command.name) |c| {
+            try writer.writeByte(std.ascii.toUpper(c));
+        }
+        try writer.writeAll("PROC = null,\n");
+    }
+    for (commands.items) |command| {
+        try writer.writeAll("pub const ");
+
+        for (command.name) |c| {
+            try writer.writeByte(std.ascii.toUpper(c));
+        }
+        try writer.writeAll("PROC = ?*const fn(\n");
+
+        const param_len = command.params.items.len;
+
+        if (command.params.items.len > 0) {
+            for (command.params.items[0 .. param_len - 1]) |param| {
+                try writer.print("{s}: {s},", .{ param.name, param.type });
+            }
+            const last_param = command.params.items[param_len - 1];
+            try writer.print("{s}: {s}", .{ last_param.name, last_param.type });
+        }
+        try writer.print(") callconv(.C) {s};", .{command.return_type});
+    }
+
     try writer.writeAll("};\n");
     _ = registry;
-    _ = commands;
 }
 
 const MODULE_TYPE_PREAMPLE =
@@ -860,6 +888,7 @@ pub fn generateModule(
     defer requirements.deinit();
 
     {
+        std.log.info("Generating {} enum groups", .{requirements.enumgroups.size});
         var it = requirements.enumgroups.iterator();
         while (it.next()) |entry| {
             const is_bitmask = registry.enumgroups.get(entry.key_ptr.*).?.bitmask;
@@ -867,14 +896,47 @@ pub fn generateModule(
         }
     }
 
-    try writer.writeAll("pub const ProcTable = struct {\n");
+    std.log.info("Generating {} freestanding enums", .{requirements.free_enums.items.len});
+    for (requirements.free_enums.items) |e| {
+        try writer.print("pub const {s}: GLenum = {};\n", .{ e.name, e.value });
+    }
 
-    try writer.writeAll("};\n");
+    std.log.info("Generating procedure table entries", .{});
+    try writeProcedureTable(registry, requirements.commands, writer);
 
-    // for (enums.items) |ename| {
-    //     try writer.print("pub const {s}", .{e.name});
-
-    //     try writer.print(": GLenum = {};\n", .{e.value});
+    // for (requirements.commands.items) |command| {
+    //     std.debug.print("{s} {s}\n", .{ command.return_type, command.name });
+    //     for (command.params.items) |param| {
+    //         std.debug.print("  {s} {s}\n", .{ param.type, param.name });
+    //     }
     // }
+}
 
+test "translateCType" {
+    const testing = std.testing;
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "void");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "void", translated);
+    }
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "GLenum");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "GLenum", translated);
+    }
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "const GLenum");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "const GLenum", translated);
+    }
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "const GLuint*");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "[*c]const GLuint", translated);
+    }
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "const GLubyte*");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "?[*:0]const GLubyte", translated);
+    }
 }
