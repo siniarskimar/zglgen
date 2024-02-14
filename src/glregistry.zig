@@ -35,7 +35,7 @@ const ElementTag = enum {
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
-    arena: std.heap.ArenaAllocator,
+    string_arena: std.heap.ArenaAllocator,
     enumgroups: std.StringHashMapUnmanaged(EnumGroup) = .{},
     enums: std.StringHashMapUnmanaged(Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
@@ -99,7 +99,7 @@ pub const Registry = struct {
     }
 
     pub fn deinit(self: *@This()) void {
-        self.arena.deinit();
+        self.string_arena.deinit();
     }
 
     pub fn sortFeatures(self: *@This()) void {
@@ -139,7 +139,7 @@ pub const Registry = struct {
 };
 
 fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.arena.allocator();
+    const arena_allocator = registry.string_arena.allocator();
 
     const proto = tree.root.?.findElement("proto") orelse
         return error.CommandWithoutProto;
@@ -198,7 +198,7 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
 }
 
 pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
-    const arena_allocator = registry.arena.allocator();
+    const arena_allocator = registry.string_arena.allocator();
 
     const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
     const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
@@ -236,7 +236,7 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
 }
 
 pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
-    const arena_allocator = registry.arena.allocator();
+    const arena_allocator = registry.string_arena.allocator();
 
     const group = tag.attributes.get("group") orelse return;
     const bitmask = if (tag.attributes.get("type")) |attr_type|
@@ -261,7 +261,7 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
 }
 
 pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.arena.allocator();
+    const arena_allocator = registry.string_arena.allocator();
     const tag = tree.root.?;
     const name = tag.attributes.get("name") orelse return error.ExtensionWithoutName;
 
@@ -288,7 +288,7 @@ pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Eleme
 }
 
 pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.arena.allocator();
+    const arena_allocator = registry.string_arena.allocator();
     var tag = tree.root.?;
     const api_attr = tag.attributes.get("api") orelse return error.FeatureWithoutApi;
     const number = tag.attributes.get("number") orelse return error.FeatureWithoutNumber;
