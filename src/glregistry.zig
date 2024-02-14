@@ -94,11 +94,34 @@ pub const Registry = struct {
     pub fn init(allocator: std.mem.Allocator) @This() {
         return .{
             .allocator = allocator,
-            .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .string_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
         };
     }
 
     pub fn deinit(self: *@This()) void {
+        self.enumgroups.deinit(self.allocator);
+        {
+            var it = self.enums.iterator();
+            while (it.next()) |entry| {
+                var e: *Registry.Enum = entry.value_ptr;
+                e.groups.deinit(self.allocator);
+            }
+            self.enums.deinit(self.allocator);
+        }
+        {
+            var it = self.commands.iterator();
+            while (it.next()) |entry| {
+                var command: *Registry.Command = entry.value_ptr;
+                command.params.deinit(self.allocator);
+            }
+            self.commands.deinit(self.allocator);
+        }
+        for (self.features.items) |*feature| {
+            feature.require_set.deinit(self.allocator);
+            feature.remove_set.deinit(self.allocator);
+        }
+        self.features.deinit(self.allocator);
+        self.extensions.deinit(self.allocator);
         self.string_arena.deinit();
     }
 
@@ -139,7 +162,8 @@ pub const Registry = struct {
 };
 
 fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.string_arena.allocator();
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
 
     const proto = tree.root.?.findElement("proto") orelse
         return error.CommandWithoutProto;
@@ -149,12 +173,13 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
     const name_elem = proto.findElement("name") orelse
         return error.CommandWithoutName;
 
-    var buffer = std.ArrayList(u8).init(arena_allocator);
+    var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
 
     try name_elem.collectText(buffer.writer());
 
-    const cmd_name = try buffer.toOwnedSlice();
+    const cmd_name = try string_allocator.dupe(u8, buffer.items);
+    buffer.clearRetainingCapacity();
 
     if (return_type_elem) |elem| {
         try elem.collectText(buffer.writer());
@@ -162,7 +187,8 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
         try buffer.appendSlice("void");
     }
 
-    const return_type = try buffer.toOwnedSlice();
+    const return_type = try string_allocator.dupe(u8, buffer.items);
+    buffer.clearRetainingCapacity();
 
     var cmd = Registry.Command{
         .name = cmd_name,
@@ -177,7 +203,8 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
             return error.CommandParamWithoutName;
 
         try param_name_elem.collectText(buffer.writer());
-        const param_name = try buffer.toOwnedSlice();
+        const param_name = try string_allocator.dupe(u8, buffer.items);
+        buffer.clearRetainingCapacity();
 
         if (param_elem.findElement("ptype")) |param_type| {
             try param_type.collectText(buffer.writer());
@@ -185,27 +212,30 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
             try param_elem.collectTextBefore(param_name_elem, buffer.writer());
         }
 
-        const param_type = try buffer.toOwnedSlice();
+        const param_type = try string_allocator.dupe(u8, buffer.items);
+        buffer.clearRetainingCapacity();
 
-        try cmd.params.append(arena_allocator, .{
+        // TODO: fill in group parameter
+        try cmd.params.append(allocator, .{
             .name = param_name,
             .type = param_type,
             .group = null,
         });
     }
 
-    try registry.commands.putNoClobber(arena_allocator, cmd.name, cmd);
+    try registry.commands.putNoClobber(allocator, cmd.name, cmd);
 }
 
 pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
-    const arena_allocator = registry.string_arena.allocator();
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
 
     const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
     const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
     const maybe_groups = tag.attributes.get("group");
 
     var en = Registry.Enum{
-        .name = try arena_allocator.dupe(u8, name),
+        .name = try string_allocator.dupe(u8, name),
         .value = 0,
     };
 
@@ -222,21 +252,22 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
         var it = std.mem.splitScalar(u8, groups, ',');
         while (it.next()) |group| {
             if (registry.enumgroups.getKey(group)) |key| {
-                try en.groups.append(arena_allocator, key);
+                try en.groups.append(registry.allocator, key);
                 continue;
             }
 
-            const copy = try arena_allocator.dupe(u8, group);
-            try registry.enumgroups.putNoClobber(arena_allocator, copy, .{ .bitmask = false });
-            try en.groups.append(arena_allocator, copy);
+            const copy = try string_allocator.dupe(u8, group);
+            try registry.enumgroups.putNoClobber(registry.allocator, copy, .{ .bitmask = false });
+            try en.groups.append(registry.allocator, copy);
         }
     }
 
-    try registry.enums.put(arena_allocator, en.name, en);
+    try registry.enums.put(allocator, en.name, en);
 }
 
 pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
-    const arena_allocator = registry.string_arena.allocator();
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
 
     const group = tag.attributes.get("group") orelse return;
     const bitmask = if (tag.attributes.get("type")) |attr_type|
@@ -254,18 +285,19 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     };
 
     try registry.enumgroups.putNoClobber(
-        arena_allocator,
-        try arena_allocator.dupe(u8, group),
+        allocator,
+        try string_allocator.dupe(u8, group),
         egroup,
     );
 }
 
 pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.string_arena.allocator();
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
     const tag = tree.root.?;
     const name = tag.attributes.get("name") orelse return error.ExtensionWithoutName;
 
-    try registry.extensions.putNoClobber(arena_allocator, try arena_allocator.dupe(u8, name), {});
+    try registry.extensions.putNoClobber(allocator, try string_allocator.dupe(u8, name), {});
 }
 
 pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Element) !Registry.Requirement {
@@ -288,7 +320,8 @@ pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Eleme
 }
 
 pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
-    const arena_allocator = registry.string_arena.allocator();
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
     var tag = tree.root.?;
     const api_attr = tag.attributes.get("api") orelse return error.FeatureWithoutApi;
     const number = tag.attributes.get("number") orelse return error.FeatureWithoutNumber;
@@ -323,8 +356,8 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
         var it = require_elem.elementIterator();
         while (it.next()) |component_elem| {
             try feature.require_set.append(
-                arena_allocator,
-                try extractRequirement(arena_allocator, component_elem),
+                allocator,
+                try extractRequirement(string_allocator, component_elem),
             );
         }
     }
@@ -334,13 +367,13 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
         var it = remove_elem.elementIterator();
         while (it.next()) |component_elem| {
             try feature.remove_set.append(
-                arena_allocator,
-                try extractRequirement(arena_allocator, component_elem),
+                allocator,
+                try extractRequirement(string_allocator, component_elem),
             );
         }
     }
 
-    try registry.features.append(arena_allocator, feature);
+    try registry.features.append(allocator, feature);
 }
 
 pub fn parseRegistry(
@@ -465,8 +498,8 @@ pub fn parseRegistry(
                     if (element.getTag() != elemtag) {
                         return error.EndTagMismatch;
                     }
-                    element_stack.items[element_stack.items.len - 1].deinit(allocator);
-                    _ = element_stack.pop();
+                    var top = element_stack.pop();
+                    top.deinit(allocator);
                 }
             },
             .comment => {},
@@ -663,6 +696,8 @@ fn writeProcedureTable(
 ) !void {
     try writer.writeAll("pub const ProcTable = struct {\n");
     try writer.writeAll("};\n");
+    _ = registry;
+    _ = commands;
 }
 
 const MODULE_TYPE_PREAMPLE =
