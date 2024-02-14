@@ -262,12 +262,13 @@ pub const XmlTree = struct {
         }
 
         pub fn collectTextBefore(self: @This(), child: *@This(), writer: anytype) !void {
-            for (self.content.items) |content| switch (content) {
-                .element => |*elem| {
-                    if (elem == child) {
+            for (self.content.items, 0..) |content, idx| switch (content) {
+                .element => {
+                    if (&(self.content.items[idx].element) == child) {
+                        // std.debug.print("hit\n", .{});
                         break;
                     }
-                    try elem.collectText(writer);
+                    try self.content.items[idx].element.collectText(writer);
                 },
                 .text => |text| {
                     try writer.writeAll(text);
