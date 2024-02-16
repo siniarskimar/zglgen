@@ -527,99 +527,90 @@ fn shiftDistance(a: usize, b: usize) u6 {
     unreachable;
 }
 
-fn writeEnumGroup(
-    is_bitmask: bool,
+fn writeEnumBitmask(
     groupname: []const u8,
     enums: *std.ArrayListUnmanaged(Registry.Enum),
     writer: anytype,
 ) !void {
-    if (is_bitmask) {
-        const max_int = std.math.maxInt(u32);
+    const max_int = std.math.maxInt(u32);
 
-        const SortCtx = struct {
-            items: []Registry.Enum,
+    const SortCtx = struct {
+        items: []Registry.Enum,
 
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                return ctx.items[a].value < ctx.items[b].value;
-            }
-            pub fn swap(ctx: @This(), a: usize, b: usize) void {
-                std.mem.swap(Registry.Enum, &ctx.items[a], &ctx.items[b]);
-            }
-        };
-        std.sort.heapContext(0, enums.items.len, SortCtx{ .items = enums.items });
-
-        try writer.print("pub const {s} = packed struct(GLenum) {{", .{groupname});
-        var bitgaps: u8 = 0;
-        var pow2: u6 = 0;
-        var none_bits: ?Registry.Enum = null;
-        var max_bits: ?Registry.Enum = null;
-
-        for (enums.items) |e| {
-            if (e.value == max_int) {
-                max_bits = e;
-                continue;
-            }
-            if (e.value == 0) {
-                none_bits = e;
-                continue;
-            }
-
-            const expected_value = @shlExact(@as(usize, 1), pow2);
-            if (e.value > expected_value) {
-                bitgaps += 1;
-                const padding_bits = shiftDistance(e.value, expected_value);
-
-                for (0..bitgaps) |_| {
-                    try writer.writeAll("_");
-                }
-                try writer.print(": u{} = 0,\n", .{padding_bits});
-
-                pow2 += padding_bits;
-            }
-
-            try writer.print("{s}: bool = false, // 0x{X}\n", .{ e.name, e.value });
-            pow2 += 1;
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            return ctx.items[a].value < ctx.items[b].value;
         }
-        if (pow2 < @bitSizeOf(c_uint)) {
-            for (0..bitgaps + 1) |_| {
+        pub fn swap(ctx: @This(), a: usize, b: usize) void {
+            std.mem.swap(Registry.Enum, &ctx.items[a], &ctx.items[b]);
+        }
+    };
+    std.sort.heapContext(0, enums.items.len, SortCtx{ .items = enums.items });
+
+    try writer.print("pub const {s} = packed struct(GLenum) {{", .{groupname});
+    var bitgaps: u8 = 0;
+    var pow2: u6 = 0;
+    var none_bits: ?Registry.Enum = null;
+    var max_bits: ?Registry.Enum = null;
+
+    for (enums.items) |e| {
+        if (e.value == max_int) {
+            max_bits = e;
+            continue;
+        }
+        if (e.value == 0) {
+            none_bits = e;
+            continue;
+        }
+
+        const expected_value = @shlExact(@as(usize, 1), pow2);
+        if (e.value > expected_value) {
+            bitgaps += 1;
+            const padding_bits = shiftDistance(e.value, expected_value);
+
+            for (0..bitgaps) |_| {
                 try writer.writeAll("_");
             }
-            try writer.print(": u{} = 0,\n", .{@bitSizeOf(c_uint) - pow2});
-        }
-        if (none_bits) |e| {
-            try writer.print("pub const {s} = @as(@This(), @bitCast(0x{X}));\n", .{ e.name, e.value });
-        }
-        if (max_bits) |e| {
-            try writer.print("pub const {s} = @as(@This(), @bitCast(0x{X}));\n", .{ e.name, e.value });
+            try writer.print(": u{} = 0,\n", .{padding_bits});
+
+            pow2 += padding_bits;
         }
 
-        try writer.writeAll("};\n");
-    } else {
-        try writer.print("pub const {s} = enum(GLenum) {{", .{groupname});
-
-        for (enums.items) |e| {
-            try writer.print("{s} = {},", .{ e.name, e.value });
-        }
-
-        try writer.writeAll("_,};\n");
+        try writer.print("{s}: bool = false, // 0x{X}\n", .{ e.name, e.value });
+        pow2 += 1;
     }
+    if (pow2 < @bitSizeOf(c_uint)) {
+        for (0..bitgaps + 1) |_| {
+            try writer.writeAll("_");
+        }
+        try writer.print(": u{} = 0,\n", .{@bitSizeOf(c_uint) - pow2});
+    }
+    if (none_bits) |e| {
+        try writer.print("pub const {s} = @as(@This(), @bitCast(0x{X}));\n", .{ e.name, e.value });
+    }
+    if (max_bits) |e| {
+        try writer.print("pub const {s} = @as(@This(), @bitCast(0x{X}));\n", .{ e.name, e.value });
+    }
+
+    try writer.writeAll("};\n");
 }
 
 const FeatureRequirements = struct {
     allocator: std.mem.Allocator,
-    enumgroups: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Registry.Enum)) = .{},
-    free_enums: std.ArrayListUnmanaged(Registry.Enum) = .{},
+    enumbitmasks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Registry.Enum)) = .{},
+    enumgroups: std.StringHashMapUnmanaged(void) = .{},
+    enums: std.ArrayListUnmanaged(Registry.Enum) = .{},
     commands: std.ArrayListUnmanaged(Registry.Command) = .{},
 
     pub fn deinit(self: *@This()) void {
         {
-            var it = self.enumgroups.valueIterator();
+            var it = self.enumbitmasks.valueIterator();
             while (it.next()) |v| {
                 v.deinit(self.allocator);
             }
-            self.enumgroups.deinit(self.allocator);
+            self.enumbitmasks.deinit(self.allocator);
         }
-        self.free_enums.deinit(self.allocator);
+        self.enumgroups.deinit(self.allocator);
+        self.enums.deinit(self.allocator);
         self.commands.deinit(self.allocator);
     }
 };
@@ -646,67 +637,51 @@ fn resolveFeatureRequirements(
         try requirements.appendSlice(feature.require_set.items);
     }
 
-    var enumgroups = std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Registry.Enum)){};
-    errdefer {
-        var it = enumgroups.valueIterator();
-        while (it.next()) |v| {
-            v.deinit(allocator);
-        }
-        enumgroups.deinit(allocator);
-    }
-    var free_enums_found = std.StringHashMap(void).init(allocator);
-    defer free_enums_found.deinit();
+    var result = FeatureRequirements{ .allocator = allocator };
+    errdefer result.deinit();
 
-    var free_enums = std.ArrayListUnmanaged(Registry.Enum){};
-    errdefer free_enums.deinit(allocator);
+    var dedup_set = std.StringHashMap(void).init(allocator);
+    defer dedup_set.deinit();
 
-    var commands_found = std.StringHashMap(void).init(allocator);
-    defer commands_found.deinit();
-
-    var commands = std.ArrayListUnmanaged(Registry.Command){};
-    errdefer commands.deinit(allocator);
-
-    for (requirements.items) |req| switch (req) {
+    outer: for (requirements.items) |req| switch (req) {
         .@"enum" => |ename| {
             // TODO: Pay attention to enum's alias attribute
 
             const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
-            outer: for (e.groups.items) |egroup| {
-                if (enumgroups.getPtr(egroup)) |group| {
-                    for (group.items) |e2| {
-                        if (std.mem.eql(u8, e2.name, ename)) {
-                            continue :outer;
-                        }
+
+            const dedup_result = try dedup_set.getOrPut(ename);
+            if (dedup_result.found_existing) {
+                continue;
+            }
+
+            for (e.groups.items) |egroup_name| {
+                const egroup = registry.enumgroups.get(egroup_name) orelse unreachable;
+                if (egroup.bitmask) {
+                    const search_result = try result.enumbitmasks.getOrPut(allocator, egroup_name);
+                    if (!search_result.found_existing) {
+                        search_result.value_ptr.* = std.ArrayListUnmanaged(Registry.Enum){};
                     }
-                    try group.append(allocator, e);
+                    try search_result.value_ptr.append(allocator, e);
+                    continue :outer;
                 } else {
-                    try enumgroups.putNoClobber(allocator, egroup, std.ArrayListUnmanaged(Registry.Enum){});
-                    try enumgroups.getPtr(egroup).?.append(allocator, e);
+                    _ = try result.enumgroups.getOrPut(allocator, egroup_name);
                 }
             }
-            if (e.groups.items.len == 0) {
-                const result = try free_enums_found.getOrPut(e.name);
-                if (!result.found_existing) {
-                    try free_enums.append(allocator, e);
-                }
-            }
+
+            try result.enums.append(allocator, e);
         },
         .command => |cname| {
             const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
-            const dedup_result = try commands_found.getOrPut(command.name);
-            if (!dedup_result.found_existing) {
-                try commands.append(allocator, command);
+            const dedup_result = try dedup_set.getOrPut(command.name);
+            if (dedup_result.found_existing) {
+                continue;
             }
+            try result.commands.append(allocator, command);
         },
         .type => {},
     };
 
-    return .{
-        .allocator = allocator,
-        .enumgroups = enumgroups,
-        .free_enums = free_enums,
-        .commands = commands,
-    };
+    return result;
 }
 
 fn writeProcedureTable(
@@ -902,28 +877,40 @@ pub fn generateModule(
     defer requirements.deinit();
 
     {
-        std.log.info("Generating {} enum groups", .{requirements.enumgroups.size});
-        var it = requirements.enumgroups.iterator();
+        var it = requirements.enumbitmasks.iterator();
         while (it.next()) |entry| {
-            const is_bitmask = registry.enumgroups.get(entry.key_ptr.*).?.bitmask;
-            try writeEnumGroup(is_bitmask, entry.key_ptr.*, entry.value_ptr, writer);
+            try writeEnumBitmask(entry.key_ptr.*, entry.value_ptr, writer);
         }
     }
 
-    std.log.info("Generating {} freestanding enums", .{requirements.free_enums.items.len});
-    for (requirements.free_enums.items) |e| {
-        try writer.print("pub const {s}: GLenum = {};\n", .{ e.name, e.value });
+    {
+        var kit = requirements.enumgroups.keyIterator();
+        while (kit.next()) |egroup| {
+            try writer.print("pub const {s} = GLenum;\n", .{egroup.*});
+        }
     }
 
-    std.log.info("Generating procedure table entries", .{});
-    try writeProcedureTable(registry, requirements.commands, writer);
+    for (requirements.enums.items) |e| {
+        try writer.print(
+            "pub const {s}: {s} = 0x{X};",
+            .{
+                e.name,
+                if (e.groups.items.len == 1) e.groups.items[0] else "GLenum",
+                e.value,
+            },
+        );
+        // Add a comment to make it at least searchable.
+        if (e.groups.items.len > 1) {
+            try writer.writeAll("// groups:");
+            for (e.groups.items) |egroup_name| {
+                try writer.writeByte(' ');
+                try writer.writeAll(egroup_name);
+            }
+        }
+        try writer.writeByte('\n');
+    }
 
-    // for (requirements.commands.items) |command| {
-    //     std.debug.print("{s} {s}\n", .{ command.return_type, command.name });
-    //     for (command.params.items) |param| {
-    //         std.debug.print("  {s} {s}\n", .{ param.type, param.name });
-    //     }
-    // }
+    try writeProcedureTable(registry, requirements.commands, writer);
 }
 
 test "translateCType" {
