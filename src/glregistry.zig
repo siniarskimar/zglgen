@@ -689,7 +689,7 @@ fn writeProcedureTable(
     try writer.writeAll("pub const ProcTable = struct {\n");
 
     for (commands.items) |command| {
-        try writer.print("{s}: ?*", .{command.name});
+        try writer.print("{s}: ", .{command.name});
 
         for (command.name) |c| {
             try writer.writeByte(std.ascii.toUpper(c));
@@ -775,6 +775,7 @@ const MODULE_TYPE_PREAMPLE =
     \\pub const GLvdpauSurfaceNV = GLintptr;
     \\pub const GLVULKANPROCNV = *const fn () callconv(.C) void;
     \\
+    \\pub const GETPROCADDRESSPROC = *const fn(procname: [*:0]const u8) callconv(.C) ?*const fn() callconv(.C) void;
 ;
 
 fn translateCType(
@@ -912,6 +913,20 @@ pub fn generateModule(
     }
 
     try writeProcedureTable(registry, requirements.commands, writer);
+
+    try writer.writeAll(
+        \\pub fn loadGL(getProcAddress: GETPROCADDRESSPROC) !ProcTable {
+        \\  return ProcTable {
+    );
+
+    for (requirements.commands.items) |command| {
+        try writer.print(".{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError),\n", .{command.name});
+    }
+
+    try writer.writeAll(
+        \\  };
+        \\}
+    );
 }
 
 test "translateCType" {
