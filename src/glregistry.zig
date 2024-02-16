@@ -864,6 +864,41 @@ fn translateCType(
     return try string_allocator.dupe(u8, buffer.items);
 }
 
+pub fn writeFunctionParameterName(param: Registry.Command.Param, writer: anytype) !void {
+
+    // reserved keywords that OpenGL
+    // uses as parameter names
+    const keywords = std.ComptimeStringMap(void, .{
+        &.{"type"},
+        &.{"u1"},
+        &.{"u2"},
+        &.{"u3"},
+        &.{"u4"},
+        &.{"u5"},
+        &.{"u6"},
+        &.{"u7"},
+        &.{"u8"},
+        &.{"u9"},
+        &.{"u10"},
+        &.{"i1"},
+        &.{"i2"},
+        &.{"i3"},
+        &.{"i4"},
+        &.{"i5"},
+        &.{"i6"},
+        &.{"i7"},
+        &.{"i8"},
+        &.{"i9"},
+        &.{"i10"},
+    });
+
+    if (keywords.has(param.name)) {
+        try writer.print("@\"{s}\"", .{param.name});
+    } else {
+        try writer.writeAll(param.name);
+    }
+}
+
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
@@ -914,7 +949,50 @@ pub fn generateModule(
 
     try writeProcedureTable(registry, requirements.commands, writer);
 
+    {
+        // var func_name = std.ArrayList(u8).init(allocator);
+        // defer func_name.deinit();
+
+        for (requirements.commands.items) |command| {
+            // func_name.clearRetainingCapacity();
+            // if (std.mem.startsWith(u8, command.name, "gl")) {
+            //     try func_name.append(std.ascii.toLower(command.name[2]));
+            //     try func_name.appendSlice(command.name[3..]);
+            // } else {
+            //     try func_name.appendSlice(command.name);
+            // }
+
+            try writer.print("pub fn {s} (", .{command.name});
+
+            const param_len = command.params.items.len;
+            if (param_len > 0) {
+                for (command.params.items[0 .. param_len - 1]) |param| {
+                    try writeFunctionParameterName(param, writer);
+                    try writer.print(": {s}", .{param.type});
+                    try writer.writeByte(',');
+                }
+                const last_param = command.params.items[param_len - 1];
+                try writeFunctionParameterName(last_param, writer);
+                try writer.print(": {s}", .{last_param.type});
+            }
+
+            try writer.print(") callconv(.C) {s} {{\nreturn @call(.always_tail, current_proc_table.?.{s}.?, .{{", .{ command.return_type, command.name });
+
+            if (param_len > 0) {
+                for (command.params.items[0 .. param_len - 1]) |param| {
+                    try writeFunctionParameterName(param, writer);
+                    try writer.writeByte(',');
+                }
+                const last_param = command.params.items[param_len - 1];
+                try writeFunctionParameterName(last_param, writer);
+            }
+            try writer.writeAll("});\n}\n");
+        }
+    }
+
     try writer.writeAll(
+        \\threadlocal var current_proc_table: ?ProcTable = null;
+        \\
         \\pub fn loadGL(getProcAddress: GETPROCADDRESSPROC) !ProcTable {
         \\  return ProcTable {
     );
@@ -925,6 +1003,15 @@ pub fn generateModule(
 
     try writer.writeAll(
         \\  };
+        \\}
+    );
+
+    try writer.writeAll(
+        \\pub fn makeProcTableCurrent(proc_table: ProcTable) void {
+        \\      current_proc_table = proc_table;
+        \\}
+        \\pub fn getProcTablePtr() ?*ProcTable {
+        \\      return &(current_proc_table orelse return null);
         \\}
     );
 }
