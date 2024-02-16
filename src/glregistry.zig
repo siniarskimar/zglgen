@@ -833,7 +833,7 @@ fn translateCType(
 
         // const void * => ?*anyopaque
         // void const * => ?*anyopaque
-        // const GLenum * => [*c]
+        // const GLenum * => [*c]const GLenum
         if (std.mem.eql(u8, token, "*")) {
             const c1 = idx > 0 and std.mem.eql(u8, tokens.items[idx - 1], "void");
             const c2 = idx > 1 and std.mem.eql(u8, tokens.items[idx - 2], "void");
