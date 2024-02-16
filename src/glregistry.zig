@@ -968,23 +968,56 @@ pub fn generateModule(
             if (param_len > 0) {
                 for (command.params.items[0 .. param_len - 1]) |param| {
                     try writeFunctionParameterName(param, writer);
-                    try writer.print(": {s}", .{param.type});
+                    try writer.writeByte(':');
+                    if (param.group) |param_group| {
+                        try writer.writeAll(param_group);
+                    } else {
+                        try writer.print("{s}", .{param.type});
+                    }
                     try writer.writeByte(',');
                 }
+
                 const last_param = command.params.items[param_len - 1];
                 try writeFunctionParameterName(last_param, writer);
-                try writer.print(": {s}", .{last_param.type});
+                try writer.writeByte(':');
+                if (last_param.group) |param_group| {
+                    try writer.writeAll(param_group);
+                } else {
+                    try writer.print("{s}", .{last_param.type});
+                }
             }
 
             try writer.print(") callconv(.C) {s} {{\nreturn @call(.always_tail, current_proc_table.?.{s}.?, .{{", .{ command.return_type, command.name });
 
             if (param_len > 0) {
                 for (command.params.items[0 .. param_len - 1]) |param| {
+                    const is_bitmask = if (param.group) |param_group|
+                        requirements.enumbitmasks.getKey(param_group) != null
+                    else
+                        false;
+
+                    if (is_bitmask) {
+                        try writer.writeAll("@as(GLbitfield, @bitCast(");
+                    }
                     try writeFunctionParameterName(param, writer);
+                    if (is_bitmask) {
+                        try writer.writeAll("))");
+                    }
                     try writer.writeByte(',');
                 }
+
                 const last_param = command.params.items[param_len - 1];
+                const is_bitmask = if (last_param.group) |param_group|
+                    requirements.enumbitmasks.getKey(param_group) != null
+                else
+                    false;
+                if (is_bitmask) {
+                    try writer.writeAll("@as(GLbitfield, @bitCast(");
+                }
                 try writeFunctionParameterName(last_param, writer);
+                if (is_bitmask) {
+                    try writer.writeAll("))");
+                }
             }
             try writer.writeAll("});\n}\n");
         }
