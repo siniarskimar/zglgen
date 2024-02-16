@@ -169,26 +169,23 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
     const proto = tree.root.?.findElement("proto") orelse
         return error.CommandWithoutProto;
 
-    const return_type_elem = proto.findElement("ptype");
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    // const return_type_elem = proto.findElement("ptype");
 
     const name_elem = proto.findElement("name") orelse
         return error.CommandWithoutName;
-
-    var buffer = std.ArrayList(u8).init(allocator);
-    defer buffer.deinit();
 
     try name_elem.collectText(buffer.writer());
 
     const cmd_name = try string_allocator.dupe(u8, buffer.items);
     buffer.clearRetainingCapacity();
 
-    if (return_type_elem) |elem| {
-        try elem.collectText(buffer.writer());
-    } else {
-        try buffer.appendSlice("void");
-    }
+    try proto.collectTextBefore(name_elem, buffer.writer());
 
     const return_type = try translateCType(allocator, string_allocator, buffer.items);
+    // std.debug.print("{s} {s}\n", .{ buffer.items, return_type });
     buffer.clearRetainingCapacity();
 
     var cmd = Registry.Command{
@@ -800,13 +797,17 @@ fn translateCType(
             if (dirty_token.len == 0) {
                 continue;
             }
+            if (dirty_token.len == 1 and dirty_token[0] == '*') {
+                try tokens.append("*");
+                continue;
+            }
             var it2 = std.mem.splitScalar(u8, dirty_token, '*');
             while (it2.next()) |token| {
                 if (token.len == 0) {
                     try tokens.append("*");
                     continue;
                 }
-                try tokens.append(token);
+                try tokens.append(std.mem.trim(u8, token, " "));
             }
         }
     }
@@ -931,9 +932,19 @@ test "translateCType" {
         try testing.expectEqualSlices(u8, "const GLenum", translated);
     }
     {
+        const translated = try translateCType(testing.allocator, testing.allocator, "const GLuint *");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "[*c]const GLuint", translated);
+    }
+    {
         const translated = try translateCType(testing.allocator, testing.allocator, "const GLuint*");
         defer testing.allocator.free(translated);
         try testing.expectEqualSlices(u8, "[*c]const GLuint", translated);
+    }
+    {
+        const translated = try translateCType(testing.allocator, testing.allocator, "const GLubyte *");
+        defer testing.allocator.free(translated);
+        try testing.expectEqualSlices(u8, "?[*:0]const GLubyte", translated);
     }
     {
         const translated = try translateCType(testing.allocator, testing.allocator, "const GLubyte*");
