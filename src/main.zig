@@ -77,13 +77,53 @@ const clap_parsers = struct {
     }
 };
 
+fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const u8 {
+    const MAX_SIZE = 5 * 1024 * 1024; // 5 MiB
+
+    if (filepath) |fp| {
+        std.log.info("Using '{s}' as registry", .{fp});
+        var file = try std.fs.cwd().openFile(fp, .{});
+        defer file.close();
+
+        return try file.readToEndAlloc(allocator, MAX_SIZE);
+    }
+
+    var http = std.http.Client{ .allocator = allocator };
+    defer http.deinit();
+
+    // In 0.12.0 the following code is replaced by std.http.Client.fetch
+
+    const uri = comptime try std.Uri.parse("https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml");
+
+    std.log.info("Fetching {s}://{s}/{s}", .{ uri.scheme, uri.host.?, uri.path });
+
+    var headers = std.http.Headers{ .allocator = allocator };
+    defer headers.deinit();
+
+    try headers.append("accept", "*/*");
+
+    var request = try http.request(.GET, uri, headers, .{});
+    defer request.deinit();
+
+    try request.start();
+    try request.wait();
+
+    std.log.info("Fetch done", .{});
+
+    const reader = request.reader();
+    const response = try reader.readAllAlloc(allocator, MAX_SIZE);
+
+    return response;
+}
+
 pub fn main() !void {
     const stderr = std.io.getStdErr();
     const params = comptime clap.parseParamsComptime(
         \\-h, --help           Show this help message
         \\-o, --output <file>  Destination path for the generated module (default: prints to stdout)
         \\--api <apispec>      Api to generate
-        \\<file>               File path to OpenGL registry
+        \\--registry <file>    File path to OpenGL registry (default: downloads https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml)
+        \\<extension>...        Additional extensions
     );
     const use_c_allocator = builtin.link_libc and builtin.mode != .Debug;
 
@@ -98,6 +138,7 @@ pub fn main() !void {
     const parsers = comptime .{
         .str = clap_parsers.string,
         .file = clap_parsers.string,
+        .extension = clap_parsers.string,
         .apispec = clap_parsers.apiSpec,
     };
 
@@ -113,9 +154,6 @@ pub fn main() !void {
 
     if (res.args.help != 0) {
         return printHelp(&params);
-    } else if (res.positionals.len < 1) {
-        std.log.err("error: Insufficient number of positional arguments!\n", .{});
-        return printHelp(&params);
     }
 
     const apispec = res.args.api orelse {
@@ -124,11 +162,7 @@ pub fn main() !void {
     };
 
     const cwd = std.fs.cwd();
-    const registry_buffer = try cwd.readFileAlloc(
-        gpallocator,
-        res.positionals[0],
-        std.math.maxInt(usize),
-    );
+    const registry_buffer = try loadGlRegistry(gpallocator, res.args.registry);
     defer gpallocator.free(registry_buffer);
 
     var registry_buffer_stream = std.io.fixedBufferStream(registry_buffer);
@@ -139,7 +173,7 @@ pub fn main() !void {
     );
     defer registry.deinit();
 
-    std.log.info("Loaded registry (enum groups: {}, enums: {}, commands: {}, extensions: {})\n", .{
+    std.log.info("Loaded registry (enum groups: {}, enums: {}, commands: {}, extensions: {})", .{
         registry.enumgroups.size,
         registry.enums.size,
         registry.commands.size,
