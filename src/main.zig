@@ -17,41 +17,27 @@ const clap_parsers = struct {
 
     const ApiSpec = struct {
         api: glregistry.Registry.Feature.Api,
-        version: ?std.SemanticVersion = null,
+        version: std.SemanticVersion,
         core: bool = false,
     };
 
     pub const ApiSpecError = error{
         ApiFieldRequired,
+        ApiVersionRequired,
         BadApiTypeField,
-        BadApiCompatField,
         BadApiVersionField,
         TooManyFields,
     };
 
     pub fn apiSpec(in: []const u8) ApiSpecError!ApiSpec {
-        var spec = ApiSpec{ .api = .gl };
-
         var it = std.mem.splitScalar(u8, in, ':');
         const api_str = it.next() orelse return ApiSpecError.ApiFieldRequired;
+        const api_ver = it.next() orelse return ApiSpecError.ApiVersionRequired;
 
-        spec.api = std.meta.stringToEnum(glregistry.Registry.Feature.Api, api_str) orelse
+        const api = std.meta.stringToEnum(glregistry.Registry.Feature.Api, api_str) orelse
             return ApiSpecError.BadApiTypeField;
 
-        const field2 = std.mem.trim(u8, it.next() orelse return spec, " ");
-        var compat_field = false;
-
-        if (std.mem.eql(u8, field2, "core") or std.mem.eql(u8, field2, "compat")) {
-            spec.core = std.mem.eql(u8, field2, "core");
-            compat_field = true;
-        }
-
-        const version_field = if (compat_field)
-            it.next() orelse return spec
-        else
-            field2;
-
-        var vit = std.mem.splitScalar(u8, version_field, '.');
+        var vit = std.mem.splitScalar(u8, api_ver, '.');
         const major = std.fmt.parseInt(
             usize,
             vit.next() orelse return ApiSpecError.BadApiVersionField,
@@ -71,9 +57,10 @@ const clap_parsers = struct {
             return ApiSpecError.TooManyFields;
         }
 
-        spec.version = std.SemanticVersion{ .major = major, .minor = minor, .patch = 0 };
-
-        return spec;
+        return .{
+            .api = api,
+            .version = std.SemanticVersion{ .major = major, .minor = minor, .patch = 0 },
+        };
     }
 };
 
@@ -200,9 +187,12 @@ pub fn main() !void {
     try glregistry.generateModule(
         gpallocator,
         &registry,
-        apispec.api,
-        apispec.version,
-        apispec.core,
+        .{ .api = apispec.api, .number = apispec.version },
+        res.positionals,
         out_module_stream.writer(),
     );
+
+    if (res.args.output) |output| {
+        std.log.info("Generated '{s}'", .{output});
+    }
 }

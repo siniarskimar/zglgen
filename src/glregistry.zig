@@ -40,7 +40,7 @@ pub const Registry = struct {
     enums: std.StringHashMapUnmanaged(Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
-    extensions: std.StringHashMapUnmanaged(void) = .{},
+    extensions: std.StringHashMapUnmanaged(Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
 
     const EnumGroup = struct {
@@ -72,6 +72,17 @@ pub const Registry = struct {
         original: []const u8,
     };
 
+    pub const Extension = struct {
+        name: []const u8,
+        supported_api: std.BoundedArray(Feature.Api, 8) = .{},
+        require_set: std.ArrayListUnmanaged(RequirementRef) = .{},
+
+        const RequirementRef = struct {
+            requirement: Requirement,
+            api: ?Registry.Feature.Api = null,
+        };
+    };
+
     pub const Feature = struct {
         api: Api,
         number: std.SemanticVersion,
@@ -80,6 +91,7 @@ pub const Registry = struct {
 
         pub const Api = enum(u4) {
             gl,
+            glcore,
             gles1,
             gles2,
             glsc2,
@@ -90,6 +102,12 @@ pub const Registry = struct {
         @"enum": []const u8,
         command: []const u8,
         type: []const u8,
+
+        fn name(self: @This()) []const u8 {
+            return switch (self) {
+                inline else => |n| return n,
+            };
+        }
     };
 
     pub fn init(allocator: std.mem.Allocator) @This() {
@@ -117,12 +135,19 @@ pub const Registry = struct {
             }
             self.commands.deinit(self.allocator);
         }
+        {
+            var it = self.extensions.iterator();
+            while (it.next()) |entry| {
+                var ext: *Registry.Extension = entry.value_ptr;
+                ext.require_set.deinit(self.allocator);
+            }
+            self.extensions.deinit(self.allocator);
+        }
         for (self.features.items) |*feature| {
             feature.require_set.deinit(self.allocator);
             feature.remove_set.deinit(self.allocator);
         }
         self.features.deinit(self.allocator);
-        self.extensions.deinit(self.allocator);
         self.string_arena.deinit();
     }
 
@@ -159,6 +184,14 @@ pub const Registry = struct {
         } else unreachable;
 
         return self.features.items[feature_start..feature_end];
+    }
+    pub fn getFeature(self: @This(), feature: FeatureRef) ?Feature {
+        for (self.features.items) |feat| {
+            if (feat.api == feature.api and feat.number.order(feature) == .eq) {
+                return feat;
+            }
+        }
+        return null;
     }
 };
 
@@ -301,10 +334,45 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
 pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
-    const tag = tree.root.?;
+    var tag = tree.root.?;
     const name = tag.attributes.get("name") orelse return error.ExtensionWithoutName;
+    const supported = tag.attributes.get("supported");
 
-    try registry.extensions.putNoClobber(allocator, try string_allocator.dupe(u8, name), {});
+    var ext: Registry.Extension = .{
+        .name = try string_allocator.dupe(u8, name),
+    };
+
+    if (supported) |supstring| {
+        var it = std.mem.tokenizeScalar(u8, supstring, '|');
+        while (it.next()) |s| {
+            if (std.mem.eql(u8, s, "disabled")) {
+                break;
+            }
+            const api = std.meta.stringToEnum(Registry.Feature.Api, s) orelse {
+                std.log.debug("{s}", .{s});
+                return error.UnknownApi;
+            };
+            try ext.supported_api.append(api);
+        }
+    }
+
+    var req_elem_it = tag.findElements("require");
+    while (req_elem_it.next()) |require_elem| {
+        const api = if (require_elem.attributes.get("api")) |api_str|
+            std.meta.stringToEnum(Registry.Feature.Api, api_str) orelse return error.UnknownApi
+        else
+            null;
+
+        var req_it = require_elem.elementIterator();
+        while (req_it.next()) |req| {
+            try ext.require_set.append(allocator, .{
+                .requirement = try extractRequirement(string_allocator, req),
+                .api = api,
+            });
+        }
+    }
+
+    try registry.extensions.putNoClobber(allocator, ext.name, ext);
 }
 
 pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Element) !Registry.Requirement {
@@ -381,6 +449,11 @@ pub fn parseRegistry(
 ) !Registry {
     var registry = Registry.init(allocator);
     errdefer registry.deinit();
+    // errdefer {
+    //     if (@errorReturnTrace()) |trace| {
+    //         std.debug.dumpStackTrace(trace.*);
+    //     }
+    // }
 
     const TagOrElement = union(enum) {
         tag: ElementTag,
@@ -612,44 +685,20 @@ const FeatureRequirements = struct {
     }
 };
 
-fn resolveFeatureRequirements(
+fn resolveRequirements(
     allocator: std.mem.Allocator,
     registry: *Registry,
-    api: Registry.Feature.Api,
-    version: ?std.SemanticVersion,
-    core: bool,
-    // extensions: []Registry.Extension,
+    requirement_set: RequirementSet,
 ) !FeatureRequirements {
-    registry.sortFeatures();
-    var requirements = std.ArrayList(Registry.Requirement).init(allocator);
-    defer requirements.deinit();
-
-    _ = core;
-
-    // TODO: Respect core flag
-    for (registry.getFeatureRange(api)) |feature| {
-        if (version != null and feature.number.order(version.?) == .gt) {
-            break;
-        }
-        try requirements.appendSlice(feature.require_set.items);
-    }
-
     var result = FeatureRequirements{ .allocator = allocator };
     errdefer result.deinit();
 
-    var dedup_set = std.StringHashMap(void).init(allocator);
-    defer dedup_set.deinit();
-
-    outer: for (requirements.items) |req| switch (req) {
+    var req_it = requirement_set.valueIterator();
+    outer: while (req_it.next()) |req| switch (req.*) {
         .@"enum" => |ename| {
             // TODO: Pay attention to enum's alias attribute
 
             const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
-
-            const dedup_result = try dedup_set.getOrPut(ename);
-            if (dedup_result.found_existing) {
-                continue;
-            }
 
             for (e.groups.items) |egroup_name| {
                 const egroup = registry.enumgroups.get(egroup_name) orelse unreachable;
@@ -669,10 +718,6 @@ fn resolveFeatureRequirements(
         },
         .command => |cname| {
             const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
-            const dedup_result = try dedup_set.getOrPut(command.name);
-            if (dedup_result.found_existing) {
-                continue;
-            }
             try result.commands.append(allocator, command);
         },
         .type => {},
@@ -682,7 +727,7 @@ fn resolveFeatureRequirements(
 }
 
 fn writeProcedureTable(
-    registry: *Registry,
+    registry: *const Registry,
     commands: std.ArrayListUnmanaged(Registry.Command),
     writer: anytype,
 ) !void {
@@ -899,19 +944,80 @@ pub fn writeFunctionParameterName(param: Registry.Command.Param, writer: anytype
     }
 }
 
+const FeatureRef = struct {
+    api: Registry.Feature.Api,
+    number: std.SemanticVersion,
+};
+
+const RequirementSet = std.StringHashMap(Registry.Requirement);
+
+fn getRequirementSet(
+    allocator: std.mem.Allocator,
+    registry: *Registry,
+    feature_ref: FeatureRef,
+    extensions: []const []const u8,
+) !RequirementSet {
+    var requirement_set = RequirementSet.init(allocator);
+    errdefer requirement_set.deinit();
+
+    const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
+
+    const feature_range = registry.getFeatureRange(api_ref);
+    for (feature_range) |feature| {
+        if (feature.number.order(feature_ref.number) == .gt) {
+            break;
+        }
+        for (feature.require_set.items) |req| {
+            const getorput_res = try requirement_set.getOrPut(req.name());
+            if (getorput_res.found_existing) {
+                continue;
+            }
+            getorput_res.value_ptr.* = req;
+        }
+        if (feature_ref.api == .glcore and feature.api == .gl) for (feature.remove_set.items) |req| {
+            _ = requirement_set.remove(req.name());
+        };
+    }
+    for (extensions) |extname| {
+        if (registry.extensions.get(extname)) |extension| {
+
+            // skip if unsupported
+            if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
+                continue;
+            }
+            for (extension.require_set.items) |req_ref| {
+                if (req_ref.api != null and req_ref.api != feature_ref.api) {
+                    continue;
+                }
+                const req = req_ref.requirement;
+                const getorput_res = try requirement_set.getOrPut(req.name());
+                if (getorput_res.found_existing) {
+                    continue;
+                }
+                getorput_res.value_ptr.* = req;
+            }
+        } else {
+            std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
+        }
+    }
+    return requirement_set;
+}
+
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
-    api: Registry.Feature.Api,
-    version: ?std.SemanticVersion,
-    core: bool,
+    feature_ref: FeatureRef,
+    extensions: []const []const u8,
     writer: anytype,
 ) !void {
+    var requirement_set = try getRequirementSet(allocator, registry, feature_ref, extensions);
+    defer requirement_set.deinit();
+
+    var requirements = try resolveRequirements(allocator, registry, requirement_set);
+    defer requirements.deinit();
+
     // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMPLE);
-
-    var requirements = try resolveFeatureRequirements(allocator, registry, api, version, core);
-    defer requirements.deinit();
 
     {
         var it = requirements.enumbitmasks.iterator();
