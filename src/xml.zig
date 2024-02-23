@@ -25,6 +25,9 @@ pub const XmlTag = union(enum) {
     };
 };
 
+/// Read a tag or attribute name.
+/// If `buffer` is null, skips name.
+/// regex: `[:_A-Za-z][\-\.:_0-9A-Za-z]*`
 fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
     switch (try reader.readByte()) {
         ':',
@@ -65,6 +68,8 @@ fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
     return idx;
 }
 
+/// Skips whitespace.
+/// regex: `[ \n\t\r]*`
 fn skipWhitespace(reader: anytype) !u8 {
     while (true) switch (try reader.readByte()) {
         ' ', '\n', '\t', '\r' => {},
@@ -72,6 +77,9 @@ fn skipWhitespace(reader: anytype) !u8 {
     };
 }
 
+// TODO: Make this method return StringHashMapUnmanaged
+// TODO: Do not depend on FixedBufferStream in this method
+/// Parse a set of XML tag attributes.
 fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.mem.Allocator, stream: anytype, reader: anytype) !void {
     switch (TagType) {
         XmlTag.StartTag, XmlTag.XmlDecl => {},
@@ -135,6 +143,10 @@ fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.m
     }
 }
 
+/// Parse a singular XML tag.
+///
+/// A XML tag has a form of `<name [attrib="value"]* >`.
+/// This function expects that the first '<' is not in the buffer.
 pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     var stream = std.io.fixedBufferStream(buffer);
     const reader = stream.reader();
@@ -211,6 +223,8 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     }
 }
 
+/// Represents a XML document.
+/// Manages it's own memory.
 pub const XmlTree = struct {
     allocator: std.mem.Allocator,
     xml_decl: ?XmlTag.XmlDecl = null,
@@ -250,6 +264,7 @@ pub const XmlTree = struct {
             allocator.free(self.name);
         }
 
+        /// Collect text content recursively
         pub fn collectText(self: Element, writer: anytype) !void {
             for (self.content.items) |content| switch (content) {
                 .element => |elem| {
@@ -261,6 +276,7 @@ pub const XmlTree = struct {
             };
         }
 
+        /// Collect text content before an element recursively
         pub fn collectTextBefore(self: @This(), child: *@This(), writer: anytype) !void {
             for (self.content.items, 0..) |content, idx| switch (content) {
                 .element => {
@@ -298,6 +314,7 @@ pub const XmlTree = struct {
             }
         };
 
+        /// Iterate over child elements
         pub fn elementIterator(self: *@This()) ElementIterator {
             return .{ .index = 0, .element = self };
         }
@@ -327,6 +344,7 @@ pub const XmlTree = struct {
             }
         };
 
+        /// Finds all child elements with specified `name`
         pub fn findElements(self: *@This(), name: []const u8) FindElementsIterator {
             return .{ .inner = self.elementIterator(), .name = name };
         }
@@ -339,7 +357,13 @@ pub const XmlTree = struct {
     }
 };
 
+/// Parse a XML document into a XmlTree.
+///
+/// If `root` is not null, makes an equivalent XmlTree.Element
+/// as a root of the tree.
 pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.StartTag) !XmlTree {
+    // TODO(1): Fix potential memory leaks due to allocation errors
+
     var tree = XmlTree{ .allocator = allocator };
     errdefer tree.deinit();
 
@@ -360,6 +384,8 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
         var elem = XmlTree.Element{
             .name = try allocator.dupe(u8, root.?.name),
         };
+
+        // #TODO(1) errdefer elem.deinit(allocator);
 
         var it = root.?.attributes.iterator();
         while (it.next()) |pair| {
@@ -417,6 +443,7 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
                 var elem = XmlTree.Element{
                     .name = try allocator.dupe(u8, tag.name),
                 };
+                // #TODO(1) errdefer elem.deinit(allocator);
 
                 var it = tag.attributes.iterator();
                 while (it.next()) |pair| {
@@ -491,7 +518,35 @@ test "attributes" {
     var stream = std.io.fixedBufferStream(buffer);
     var tree = try parseXml(std.testing.allocator, stream.reader(), null);
     defer tree.deinit();
-    const attr1 = tree.root.?.content.items[0].element.attributes.get("attr1") orelse return error.NoAttribute;
 
-    try std.testing.expectEqualSlices(u8, "value1", attr1);
+    try std.testing.expect(tree.root != null);
+    try std.testing.expectEqual(tree.root.?.content.items.len, 1);
+    try std.testing.expectEqual(tree.root.?.content.items[0].element.attributes.count(), 1);
+
+    const attr1 = tree.root.?.content.items[0].element.attributes.get("attr1");
+    try std.testing.expect(attr1 != null);
+    try std.testing.expectEqualSlices(u8, "value1", attr1.?);
+}
+
+test "text content" {
+    const buffer =
+        \\<?xml version="1.0"?>
+        \\<root>
+        \\Split
+        \\<tag attr1 = "value1"/>
+        \\text
+        \\<tag attr1= "value"> content</tag>
+        \\</root>
+    ;
+    var stream = std.io.fixedBufferStream(buffer);
+    var tree = try parseXml(std.testing.allocator, stream.reader(), null);
+    defer tree.deinit();
+
+    try std.testing.expect(tree.root != null);
+
+    var text_buffer = std.ArrayList(u8).init(std.testing.allocator);
+    defer text_buffer.deinit();
+    try tree.root.?.collectText(text_buffer.writer());
+
+    try std.testing.expectEqualSlices(u8, "\nSplit\n\ntext\n content", text_buffer.items);
 }
