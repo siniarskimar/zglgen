@@ -696,11 +696,15 @@ fn resolveRequirements(
     var req_it = requirement_set.valueIterator();
     outer: while (req_it.next()) |req| switch (req.*) {
         .@"enum" => |ename| {
-            // TODO: Pay attention to enum's alias attribute
-
             const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
 
             for (e.groups.items) |egroup_name| {
+                const seen: bool = result.enumbitmasks.get(egroup_name) != null or
+                    result.enumgroups.get(egroup_name) != null;
+                if (seen) {
+                    continue;
+                }
+
                 const egroup = registry.enumgroups.get(egroup_name) orelse unreachable;
                 if (egroup.bitmask) {
                     const search_result = try result.enumbitmasks.getOrPut(allocator, egroup_name);
@@ -710,7 +714,7 @@ fn resolveRequirements(
                     try search_result.value_ptr.append(allocator, e);
                     continue :outer;
                 } else {
-                    _ = try result.enumgroups.getOrPut(allocator, egroup_name);
+                    try result.enumgroups.put(allocator, egroup_name, {});
                 }
             }
 
@@ -718,6 +722,17 @@ fn resolveRequirements(
         },
         .command => |cname| {
             const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
+            for (command.params.items) |param| {
+                if (param.group) |egroup_name| {
+                    const seen: bool = result.enumbitmasks.get(egroup_name) != null or
+                        result.enumgroups.get(egroup_name) != null;
+
+                    if (seen) {
+                        continue;
+                    }
+                    try result.enumgroups.put(allocator, egroup_name, {});
+                }
+            }
             try result.commands.append(allocator, command);
         },
         .type => {},
@@ -1056,18 +1071,7 @@ pub fn generateModule(
     try writeProcedureTable(registry, requirements.commands, writer);
 
     {
-        // var func_name = std.ArrayList(u8).init(allocator);
-        // defer func_name.deinit();
-
         for (requirements.commands.items) |command| {
-            // func_name.clearRetainingCapacity();
-            // if (std.mem.startsWith(u8, command.name, "gl")) {
-            //     try func_name.append(std.ascii.toLower(command.name[2]));
-            //     try func_name.appendSlice(command.name[3..]);
-            // } else {
-            //     try func_name.appendSlice(command.name);
-            // }
-
             try writer.print("pub fn {s} (", .{command.name});
 
             const param_len = command.params.items.len;
