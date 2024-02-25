@@ -8,6 +8,10 @@ on:
       - '**/*.zig'
   workflow_dispatch:
 
+concurency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   compile:
     strategy:
