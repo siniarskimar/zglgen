@@ -666,19 +666,11 @@ fn writeEnumBitmask(
 
 const FeatureRequirements = struct {
     allocator: std.mem.Allocator,
-    enumbitmasks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Registry.Enum)) = .{},
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.ArrayListUnmanaged(Registry.Enum) = .{},
     commands: std.ArrayListUnmanaged(Registry.Command) = .{},
 
     pub fn deinit(self: *@This()) void {
-        {
-            var it = self.enumbitmasks.valueIterator();
-            while (it.next()) |v| {
-                v.deinit(self.allocator);
-            }
-            self.enumbitmasks.deinit(self.allocator);
-        }
         self.enumgroups.deinit(self.allocator);
         self.enums.deinit(self.allocator);
         self.commands.deinit(self.allocator);
@@ -694,28 +686,16 @@ fn resolveRequirements(
     errdefer result.deinit();
 
     var req_it = requirement_set.valueIterator();
-    outer: while (req_it.next()) |req| switch (req.*) {
+    while (req_it.next()) |req| switch (req.*) {
         .@"enum" => |ename| {
             const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
 
             for (e.groups.items) |egroup_name| {
-                const seen: bool = result.enumbitmasks.get(egroup_name) != null or
-                    result.enumgroups.get(egroup_name) != null;
+                const seen: bool = result.enumgroups.get(egroup_name) != null;
                 if (seen) {
                     continue;
                 }
-
-                const egroup = registry.enumgroups.get(egroup_name) orelse unreachable;
-                if (egroup.bitmask) {
-                    const search_result = try result.enumbitmasks.getOrPut(allocator, egroup_name);
-                    if (!search_result.found_existing) {
-                        search_result.value_ptr.* = std.ArrayListUnmanaged(Registry.Enum){};
-                    }
-                    try search_result.value_ptr.append(allocator, e);
-                    continue :outer;
-                } else {
-                    try result.enumgroups.put(allocator, egroup_name, {});
-                }
+                try result.enumgroups.put(allocator, egroup_name, {});
             }
 
             try result.enums.append(allocator, e);
@@ -724,8 +704,7 @@ fn resolveRequirements(
             const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
             for (command.params.items) |param| {
                 if (param.group) |egroup_name| {
-                    const seen: bool = result.enumbitmasks.get(egroup_name) != null or
-                        result.enumgroups.get(egroup_name) != null;
+                    const seen: bool = result.enumgroups.get(egroup_name) != null;
 
                     if (seen) {
                         continue;
@@ -1034,12 +1013,12 @@ pub fn generateModule(
     // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMPLE);
 
-    {
-        var it = requirements.enumbitmasks.iterator();
-        while (it.next()) |entry| {
-            try writeEnumBitmask(entry.key_ptr.*, entry.value_ptr, writer);
-        }
-    }
+    // {
+    //     var it = requirements.enumbitmasks.iterator();
+    //     while (it.next()) |entry| {
+    //         try writeEnumBitmask(entry.key_ptr.*, entry.value_ptr, writer);
+    //     }
+    // }
 
     {
         var kit = requirements.enumgroups.keyIterator();
@@ -1101,33 +1080,12 @@ pub fn generateModule(
 
             if (param_len > 0) {
                 for (command.params.items[0 .. param_len - 1]) |param| {
-                    const is_bitmask = if (param.group) |param_group|
-                        requirements.enumbitmasks.getKey(param_group) != null
-                    else
-                        false;
-
-                    if (is_bitmask) {
-                        try writer.writeAll("@as(GLbitfield, @bitCast(");
-                    }
                     try writeFunctionParameterName(param, writer);
-                    if (is_bitmask) {
-                        try writer.writeAll("))");
-                    }
                     try writer.writeByte(',');
                 }
 
                 const last_param = command.params.items[param_len - 1];
-                const is_bitmask = if (last_param.group) |param_group|
-                    requirements.enumbitmasks.getKey(param_group) != null
-                else
-                    false;
-                if (is_bitmask) {
-                    try writer.writeAll("@as(GLbitfield, @bitCast(");
-                }
                 try writeFunctionParameterName(last_param, writer);
-                if (is_bitmask) {
-                    try writer.writeAll("))");
-                }
             }
             try writer.writeAll("});\n}\n");
         }
