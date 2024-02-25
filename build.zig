@@ -44,7 +44,7 @@ fn buildExamples(
     optimize: anytype,
     zglgen: anytype,
 ) void {
-    // const glfw_prefix_path = b.option([]const u8, "glfw-prefix-path", "Path to GLFW installation directory");
+    const install_examples = b.option(bool, "install-examples", "Whenever to put examples into install directory") orelse false;
 
     const zglgen_cmd = b.addRunArtifact(zglgen);
     zglgen_cmd.addArg("-o");
@@ -65,10 +65,13 @@ fn buildExamples(
     example_triangle.linkSystemLibrary("glfw");
     example_triangle.linkLibC();
     example_triangle.addModule("gl", gen_module);
-    b.installArtifact(example_triangle);
 
     const run_example_triangle = b.addRunArtifact(example_triangle);
-    run_example_triangle.step.dependOn(b.getInstallStep());
+    run_example_triangle.cwd = b.pathFromRoot("examples/");
+
+    if (install_examples) {
+        b.installArtifact(example_triangle);
+    }
 
     if (b.args) |args| {
         run_example_triangle.addArgs(args);
