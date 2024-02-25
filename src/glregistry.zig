@@ -1121,11 +1121,11 @@ pub fn generateModule(
         \\      return &(current_proc_table orelse return null);
         \\}
         \\
-        \\\/// Returns `true` if extension `name` is supported
-        \\\/// by current GL context
+        \\/// Returns `true` if extension `name` is supported
+        \\/// by current GL context
         \\pub fn extensionSupportedGL(name: []const u8) bool {
-        \\    \// glGetString fails only when it's parameter names an invalid string
-        \\    \// here it will never fail unless GL context is broken.
+        \\    // glGetString fails only when it's parameter names an invalid string
+        \\    // here it will never fail unless GL context is broken.
         \\    const ext_str = glGetString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
         \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name);
         \\}
