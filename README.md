@@ -2,6 +2,8 @@
 
 OpenGL bindings generator fully written in Zig. Currently targets Zig 0.11.0.
 
+![hello world triangle](./examples/triangle.png)
+
 ## Usage
 
 ### Command line
