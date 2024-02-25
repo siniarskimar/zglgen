@@ -26,7 +26,7 @@ Currently targets Zig 0.11.0.
 
 ### Why the procedure table is `thread_local`?
 
-As per (Khronos OPenGL Wiki)[https://www.khronos.org/opengl/wiki/OpenGL_Context]:
+As per [Khronos OpenGL Wiki](https://www.khronos.org/opengl/wiki/OpenGL_Context):
 
 > The current context is a thread-local variable, so a single process can have several threads
 > each of which has its own current context. However, a single context cannot be current in
