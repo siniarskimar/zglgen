@@ -61,7 +61,7 @@ pub fn main() !void {
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 2);
     glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, glfw.GLFW_OPENGL_CORE_PROFILE);
-    glfw.glfwWindowHint(glfw.GLFW_CONTEXT_DEBUG, glfw.GLFW_TRUE);
+    glfw.glfwWindowHint(glfw.GLFW_OPENGL_DEBUG_CONTEXT, glfw.GLFW_TRUE);
 
     const window = glfw.glfwCreateWindow(800, 600, "Hello", null, null) orelse {
         return error.WindowCreationFailed;
