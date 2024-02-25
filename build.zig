@@ -4,7 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zig_clap = b.dependency("clap", .{});
+    const zig_clap = b.dependency("clap", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "zglgen",
