@@ -36,16 +36,12 @@ const ElementTag = enum {
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     string_arena: std.heap.ArenaAllocator,
-    enumgroups: std.StringHashMapUnmanaged(EnumGroup) = .{},
+    enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.StringHashMapUnmanaged(Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
     extensions: std.StringHashMapUnmanaged(Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
-
-    const EnumGroup = struct {
-        bitmask: bool = false,
-    };
 
     const Enum = struct {
         name: []const u8,
@@ -291,14 +287,20 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     if (maybe_groups) |groups| {
         var it = std.mem.splitScalar(u8, groups, ',');
         while (it.next()) |group| {
-            if (registry.enumgroups.getKey(group)) |key| {
-                try en.groups.append(registry.allocator, key);
-                continue;
+            const reg_name = registry.enumgroups.getKey(group);
+            const group_regkey = if (reg_name) |_|
+                reg_name.?
+            else
+                try string_allocator.dupe(u8, group);
+
+            if (reg_name) |_| {
+                const group_getorput_result = try registry.enumgroups.getOrPut(allocator, group_regkey);
+                if (!group_getorput_result.found_existing) {
+                    group_getorput_result.value_ptr.* = {};
+                }
             }
 
-            const copy = try string_allocator.dupe(u8, group);
-            try registry.enumgroups.putNoClobber(registry.allocator, copy, .{ .bitmask = false });
-            try en.groups.append(registry.allocator, copy);
+            try en.groups.append(registry.allocator, group_regkey);
         }
     }
 
@@ -310,24 +312,15 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     const string_allocator = registry.string_arena.allocator();
 
     const group = tag.attributes.get("group") orelse return;
-    const bitmask = if (tag.attributes.get("type")) |attr_type|
-        std.mem.eql(u8, attr_type, "bitmask")
-    else
-        false;
 
-    if (registry.enumgroups.getPtr(group)) |egroup| {
-        egroup.bitmask = bitmask;
+    if (registry.enumgroups.get(group) != null) {
         return;
     }
-
-    const egroup = Registry.EnumGroup{
-        .bitmask = bitmask,
-    };
 
     try registry.enumgroups.putNoClobber(
         allocator,
         try string_allocator.dupe(u8, group),
-        egroup,
+        {},
     );
 }
 
@@ -664,7 +657,7 @@ fn writeEnumBitmask(
     try writer.writeAll("};\n");
 }
 
-const FeatureRequirements = struct {
+const ModuleRequirements = struct {
     allocator: std.mem.Allocator,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.ArrayListUnmanaged(Registry.Enum) = .{},
@@ -681,8 +674,8 @@ fn resolveRequirements(
     allocator: std.mem.Allocator,
     registry: *Registry,
     requirement_set: RequirementSet,
-) !FeatureRequirements {
-    var result = FeatureRequirements{ .allocator = allocator };
+) !ModuleRequirements {
+    var result = ModuleRequirements{ .allocator = allocator };
     errdefer result.deinit();
 
     var req_it = requirement_set.valueIterator();
@@ -997,6 +990,94 @@ fn getRequirementSet(
     return requirement_set;
 }
 
+pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
+    try writer.print("pub fn {s} (", .{command.name});
+
+    const param_len = command.params.items.len;
+    if (param_len > 0) {
+        for (command.params.items[0 .. param_len - 1]) |param| {
+            try writeFunctionParameterName(param, writer);
+            try writer.writeByte(':');
+            if (param.group) |param_group| {
+                try writer.writeAll(param_group);
+            } else {
+                try writer.print("{s}", .{param.type});
+            }
+            try writer.writeByte(',');
+        }
+
+        const last_param = command.params.items[param_len - 1];
+        try writeFunctionParameterName(last_param, writer);
+        try writer.writeByte(':');
+        if (last_param.group) |param_group| {
+            try writer.writeAll(param_group);
+        } else {
+            try writer.print("{s}", .{last_param.type});
+        }
+    }
+
+    try writer.print(") callconv(.C) {s} {{\nreturn @call(.always_tail, current_proc_table.?.{s}.?, .{{", .{ command.return_type, command.name });
+
+    if (param_len > 0) {
+        for (command.params.items[0 .. param_len - 1]) |param| {
+            try writeFunctionParameterName(param, writer);
+            try writer.writeByte(',');
+        }
+
+        const last_param = command.params.items[param_len - 1];
+        try writeFunctionParameterName(last_param, writer);
+    }
+    try writer.writeAll("});\n}\n");
+}
+
+pub fn writeFeatureLoaderFunction(feature_ref: FeatureRef, requirements: ModuleRequirements, writer: anytype) !void {
+    try writer.writeAll(
+        \\threadlocal var current_proc_table: ?ProcTable = null;
+        \\
+        \\pub fn load
+    );
+
+    for (@tagName(feature_ref.api)) |c| {
+        try writer.writeByte(std.ascii.toUpper(c));
+    }
+
+    try writer.writeAll(
+        \\(getProcAddress: GETPROCADDRESSPROC) !ProcTable {
+        \\  return ProcTable {
+    );
+
+    for (requirements.commands.items) |command| {
+        try writer.print(".{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError),\n", .{command.name});
+    }
+
+    try writer.writeAll(
+        \\  };
+        \\}
+    );
+}
+
+fn writeEnum(@"enum": Registry.Enum, writer: anytype) !void {
+    const e = @"enum";
+
+    try writer.print(
+        "pub const {s}: {s} = 0x{X};",
+        .{
+            e.name,
+            if (e.groups.items.len == 1) e.groups.items[0] else "GLenum",
+            e.value,
+        },
+    );
+    // Add a comment to make it at least searchable.
+    if (e.groups.items.len > 1) {
+        try writer.writeAll("// groups:");
+        for (e.groups.items) |egroup_name| {
+            try writer.writeByte(' ');
+            try writer.writeAll(egroup_name);
+        }
+    }
+    try writer.writeByte('\n');
+}
+
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
@@ -1013,13 +1094,6 @@ pub fn generateModule(
     // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMPLE);
 
-    // {
-    //     var it = requirements.enumbitmasks.iterator();
-    //     while (it.next()) |entry| {
-    //         try writeEnumBitmask(entry.key_ptr.*, entry.value_ptr, writer);
-    //     }
-    // }
-
     {
         var kit = requirements.enumgroups.keyIterator();
         while (kit.next()) |egroup| {
@@ -1028,84 +1102,16 @@ pub fn generateModule(
     }
 
     for (requirements.enums.items) |e| {
-        try writer.print(
-            "pub const {s}: {s} = 0x{X};",
-            .{
-                e.name,
-                if (e.groups.items.len == 1) e.groups.items[0] else "GLenum",
-                e.value,
-            },
-        );
-        // Add a comment to make it at least searchable.
-        if (e.groups.items.len > 1) {
-            try writer.writeAll("// groups:");
-            for (e.groups.items) |egroup_name| {
-                try writer.writeByte(' ');
-                try writer.writeAll(egroup_name);
-            }
-        }
-        try writer.writeByte('\n');
+        try writeEnum(e, writer);
     }
 
     try writeProcedureTable(registry, requirements.commands, writer);
 
-    {
-        for (requirements.commands.items) |command| {
-            try writer.print("pub fn {s} (", .{command.name});
-
-            const param_len = command.params.items.len;
-            if (param_len > 0) {
-                for (command.params.items[0 .. param_len - 1]) |param| {
-                    try writeFunctionParameterName(param, writer);
-                    try writer.writeByte(':');
-                    if (param.group) |param_group| {
-                        try writer.writeAll(param_group);
-                    } else {
-                        try writer.print("{s}", .{param.type});
-                    }
-                    try writer.writeByte(',');
-                }
-
-                const last_param = command.params.items[param_len - 1];
-                try writeFunctionParameterName(last_param, writer);
-                try writer.writeByte(':');
-                if (last_param.group) |param_group| {
-                    try writer.writeAll(param_group);
-                } else {
-                    try writer.print("{s}", .{last_param.type});
-                }
-            }
-
-            try writer.print(") callconv(.C) {s} {{\nreturn @call(.always_tail, current_proc_table.?.{s}.?, .{{", .{ command.return_type, command.name });
-
-            if (param_len > 0) {
-                for (command.params.items[0 .. param_len - 1]) |param| {
-                    try writeFunctionParameterName(param, writer);
-                    try writer.writeByte(',');
-                }
-
-                const last_param = command.params.items[param_len - 1];
-                try writeFunctionParameterName(last_param, writer);
-            }
-            try writer.writeAll("});\n}\n");
-        }
-    }
-
-    try writer.writeAll(
-        \\threadlocal var current_proc_table: ?ProcTable = null;
-        \\
-        \\pub fn loadGL(getProcAddress: GETPROCADDRESSPROC) !ProcTable {
-        \\  return ProcTable {
-    );
-
     for (requirements.commands.items) |command| {
-        try writer.print(".{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError),\n", .{command.name});
+        try writeFunction(command, writer);
     }
 
-    try writer.writeAll(
-        \\  };
-        \\}
-    );
+    try writeFeatureLoaderFunction(feature_ref, requirements, writer);
 
     try writer.writeAll(
         \\pub fn makeProcTableCurrent(proc_table: ProcTable) void {
