@@ -58,7 +58,7 @@ fn buildExamples(
 
     const example_triangle = b.addExecutable(.{
         .name = "example-triangle",
-        .root_source_file = .{ .path = "examples/traingle.zig" },
+        .root_source_file = .{ .path = "examples/triangle.zig" },
         .target = target,
         .optimize = optimize,
     });
