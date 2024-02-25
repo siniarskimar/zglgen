@@ -1,8 +1,8 @@
 # zglgen
 
-OpenGL bindings generator written in Zig.
+OpenGL bindings generator written in Zig. Currently targets Zig 0.11.0.
 
-Currently targets Zig 0.11.0.
+For example on how to use a generated module see [examples/triangle.zig](./examples/triangle.zig)
 
 ```
 [-h] [-o <file>] [--api <apispec>] [--registry <file>] <extension>...
