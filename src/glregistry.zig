@@ -1114,11 +1114,17 @@ pub fn generateModule(
     try writeFeatureLoaderFunction(feature_ref, requirements, writer);
 
     try writer.writeAll(
-        \\pub fn makeProcTableCurrent(proc_table: ProcTable) void {
+        \\pub fn makeProcTableCurrent(proc_table: ?ProcTable) void {
         \\      current_proc_table = proc_table;
         \\}
-        \\pub fn getProcTablePtr() ?*ProcTable {
+        \\pub fn getProcTablePtr() ?*const ProcTable {
         \\      return &(current_proc_table orelse return null);
+        \\}
+        \\pub fn extensionSupported(name: []const u8) bool {
+        \\    \// glGetString fails only when it's parameter names an invalid string
+        \\    \// here it will never fail unless GL context is broken.
+        \\    const ext_str = glGetString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
+        \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name);
         \\}
     );
 }
