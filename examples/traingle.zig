@@ -29,6 +29,23 @@ fn glfwErrCallback(_: c_int, error_msg: [*c]const u8) callconv(.C) void {
     std.log.err("[GLFW] {s} ", .{error_msg});
 }
 
+fn isExtensionSupported(str: []const u8) bool {
+    const ext_str = std.mem.span(gl.glGetString(gl.GL_EXTENSIONS) orelse unreachable);
+    return std.mem.indexOf(u8, str, ext_str) != null;
+}
+
+fn glMessageCallback(
+    _: gl.GLenum,
+    _: gl.GLenum,
+    _: gl.GLuint,
+    _: gl.GLenum,
+    _: gl.GLsizei,
+    message: [*:0]const u8,
+    _: ?*const anyopaque,
+) callconv(.C) void {
+    std.log.debug("[GL] {s}\n", .{message});
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -43,15 +60,26 @@ pub fn main() !void {
 
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfw.glfwWindowHint(glfw.GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, glfw.GLFW_OPENGL_CORE_PROFILE);
+    glfw.glfwWindowHint(glfw.GLFW_CONTEXT_DEBUG, glfw.GLFW_TRUE);
 
-    const window = glfw.glfwCreateWindow(800, 600, "Hello", null, null);
-    if (window == null) {
+    const window = glfw.glfwCreateWindow(800, 600, "Hello", null, null) orelse {
         return error.WindowCreationFailed;
-    }
+    };
     defer glfw.glfwDestroyWindow(window);
 
     glfw.glfwMakeContextCurrent(window);
     gl.makeProcTableCurrent(try gl.loadGL(glfw.glfwGetProcAddress));
+
+    glfw.glfwSwapInterval(1);
+    {
+        const version_str = gl.glGetString(gl.GL_VERSION) orelse "<no version string>";
+        std.log.info("OpenGL {s}\n", .{version_str});
+    }
+
+    gl.glEnable(gl.GL_DEBUG_OUTPUT);
+    gl.glDebugMessageCallback(glMessageCallback, null);
+    gl.glDebugMessageControl(gl.GL_DONT_CARE, gl.GL_DONT_CARE, gl.GL_DONT_CARE, 0, null, gl.GL_TRUE);
 
     var program: gl.GLuint = gl.glCreateProgram();
     {
@@ -127,11 +155,12 @@ pub fn main() !void {
     }
 
     const verticies = [_]f32{
-        -0.5, -0.5, 0.0, 0.0, 0.0, 1.0,
-        0.5,  -0.5, 0.0, 0.0, 1.0, 0.0,
-        0.0,  0.5,  0.0, 1.0, 0.0, 0.0,
+        // position:vec3, color:vec3
+        -1, -1, 0.0, 0.0, 0.0, 1.0,
+        1,  -1, 0.0, 0.0, 1.0, 0.0,
+        0,  1,  0.0, 1.0, 0.0, 0.0,
     };
-    // const indecies = [_]gl.GLuint{ 0, 1, 2 };
+    const indecies = [_]gl.GLuint{ 0, 1, 2 };
 
     var vao: gl.GLuint = 0;
     var vbo: gl.GLuint = 0;
@@ -140,21 +169,22 @@ pub fn main() !void {
 
     gl.glGenBuffers(1, &vbo);
     gl.glBindBuffer(gl.GL_ARRAY_BUFFER, vbo);
-    gl.glBufferData(gl.GL_ARRAY_BUFFER, @sizeOf(f32) * verticies.len, @ptrCast(&verticies), gl.GL_STATIC_DRAW);
+    gl.glBufferData(gl.GL_ARRAY_BUFFER, @sizeOf([verticies.len]f32), &verticies, gl.GL_STATIC_DRAW);
 
     gl.glEnableVertexAttribArray(0);
-    gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, @sizeOf(f32) * 3, null);
+    gl.glVertexAttribPointer(0, 3, gl.GL_FLOAT, gl.GL_FALSE, @sizeOf(f32) * 6, @ptrFromInt(0));
 
     gl.glEnableVertexAttribArray(1);
-    gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, @sizeOf(f32) * 3, @ptrFromInt(@sizeOf(f32) * 3));
+    gl.glVertexAttribPointer(1, 3, gl.GL_FLOAT, gl.GL_FALSE, @sizeOf(f32) * 6, @ptrFromInt(@sizeOf(f32) * 3));
 
     gl.glUseProgram(program);
     gl.glClearColor(0.0, 0.0, 0.0, 1.0);
     while (glfw.glfwWindowShouldClose(window) == 0) {
         glfw.glfwPollEvents();
-        gl.glClear(@bitCast(gl.GL_COLOR_BUFFER_BIT));
-        gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3);
-        // gl.glDrawElements(gl.GL_TRIANGLES, 3, gl.GL_UNSIGNED_INT, &indecies);
+
+        gl.glClear(gl.GL_COLOR_BUFFER_BIT);
+        // gl.glDrawArrays(gl.GL_TRIANGLES, 0, 3);
+        gl.glDrawElements(gl.GL_TRIANGLES, 3, gl.GL_UNSIGNED_INT, &indecies);
 
         glfw.glfwSwapBuffers(window);
     }

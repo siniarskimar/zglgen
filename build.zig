@@ -44,10 +44,13 @@ fn buildExamples(
     optimize: anytype,
     zglgen: anytype,
 ) void {
+    // const glfw_prefix_path = b.option([]const u8, "glfw-prefix-path", "Path to GLFW installation directory");
+
     const zglgen_cmd = b.addRunArtifact(zglgen);
     zglgen_cmd.addArg("-o");
     const generated_path = zglgen_cmd.addPrefixedOutputFileArg("", "gl_3_2.zig");
     zglgen_cmd.addArgs(&[_][]const u8{ "--api", "gl:3.2" });
+    zglgen_cmd.addArg("GL_KHR_debug");
 
     const gen_module = b.createModule(.{
         .source_file = generated_path,
@@ -60,7 +63,6 @@ fn buildExamples(
         .optimize = optimize,
     });
     example_triangle.linkSystemLibrary("glfw");
-    example_triangle.addSystemIncludePath(.{ .path = "/usr/local/include" });
     example_triangle.linkLibC();
     example_triangle.addModule("gl", gen_module);
     b.installArtifact(example_triangle);
