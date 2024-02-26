@@ -3,7 +3,9 @@ const clap = @import("clap");
 const builtin = @import("builtin");
 const glregistry = @import("./glregistry.zig");
 
-pub const log_level: std.log.Level = .err;
+pub const std_options = struct {
+    pub const log_level = std.log.Level.info;
+};
 
 fn printHelp(params: []const clap.Param(clap.Help)) !void {
     try clap.usage(std.io.getStdErr().writer(), clap.Help, params);
@@ -64,6 +66,34 @@ const clap_parsers = struct {
     }
 };
 
+fn getCacheDirPath(allocator: std.mem.Allocator) ![]const u8 {
+    var envmap = try std.process.getEnvMap(allocator);
+    defer envmap.deinit();
+
+    switch (builtin.os.tag) {
+        .macos => {
+            const home_path = envmap.get("HOME") orelse return error.CacheDirNotFound;
+            return try std.fs.path.join(allocator, &[_][]const u8{ home_path, ".cache", "zglgen" });
+        },
+        .linux, .freebsd => {
+            if (envmap.get("XDG_CACHE_DIR")) |xdg_cache_path| {
+                return try std.fs.path.join(allocator, &[_][]const u8{ xdg_cache_path, "zglgen" });
+            }
+            const home_path = envmap.get("HOME") orelse return error.CacheDirNotFound;
+            return try std.fs.path.join(allocator, &[_][]const u8{ home_path, ".cache", "zglgen" });
+        },
+        .windows => {
+            const appdata_path: ?[]const u8 = envmap.get("LOCALAPPDATA") orelse envmap.get("APPDATA");
+            if (appdata_path) |path| {
+                return try std.fs.path.join(allocator, &[_][]const u8{ path, "zglgen" });
+            }
+            const home_path = envmap.get("HOMEPATH") orelse envmap.get("USERPROFILE") orelse return error.CacheDirNotFound;
+            return try std.fs.path.join(allocator, &[_][]const u8{ home_path, ".cache", "zglgen" });
+        },
+        else => return error.CacheDirNotFound,
+    }
+}
+
 fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const u8 {
     const MAX_SIZE = 5 * 1024 * 1024; // 5 MiB
 
@@ -74,6 +104,32 @@ fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const 
 
         return try file.readToEndAlloc(allocator, MAX_SIZE);
     }
+    const cache_dir_path = try getCacheDirPath(allocator);
+    defer allocator.free(cache_dir_path);
+
+    var cache_dir: ?std.fs.Dir = std.fs.openDirAbsolute(cache_dir_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => try std.fs.cwd().makeOpenPath(cache_dir_path, .{}),
+        else => blk: {
+            std.log.warn("Failed to open cache directory {s}, cache disabled {s}", .{ cache_dir_path, @errorName(err) });
+            break :blk null;
+        },
+    };
+    defer if (cache_dir) |*dir| dir.close();
+
+    blk: {
+        if (cache_dir) |dir| {
+            const cached_file = dir.openFile("gl.xml", .{}) catch |err| switch (err) {
+                error.FileNotFound => break :blk,
+                else => return err,
+            };
+            defer cached_file.close();
+            const stat = try cached_file.stat();
+            if (stat.mtime + std.time.ns_per_day > std.time.nanoTimestamp()) {
+                std.log.info("Using a cached GL registry", .{});
+                return try cached_file.readToEndAlloc(allocator, MAX_SIZE);
+            }
+        }
+    }
 
     var http = std.http.Client{ .allocator = allocator };
     defer http.deinit();
@@ -82,7 +138,7 @@ fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const 
 
     const uri = comptime try std.Uri.parse("https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml");
 
-    std.log.info("Fetching {s}://{s}/{s}", .{ uri.scheme, uri.host.?, uri.path });
+    std.log.info("Fetching {s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path });
 
     var headers = std.http.Headers{ .allocator = allocator };
     defer headers.deinit();
@@ -99,6 +155,13 @@ fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const 
 
     const reader = request.reader();
     const response = try reader.readAllAlloc(allocator, MAX_SIZE);
+
+    if (cache_dir) |dir| {
+        const file = try dir.createFile("gl.xml", .{});
+        defer file.close();
+
+        try file.writeAll(response);
+    }
 
     return response;
 }
