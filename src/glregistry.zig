@@ -860,7 +860,7 @@ fn translateCType(
     return try string_allocator.dupe(u8, buffer.items);
 }
 
-pub fn writeFunctionParameterName(param: Registry.Command.Param, writer: anytype) !void {
+pub fn writeFunctionParameterName(param: Registry.Command.Param, index: ?usize, writer: anytype) !void {
 
     // reserved keywords that OpenGL
     // uses as parameter names
@@ -887,11 +887,18 @@ pub fn writeFunctionParameterName(param: Registry.Command.Param, writer: anytype
         &.{"i9"},
         &.{"i10"},
     });
+    const is_reserved = keywords.has(param.name);
 
-    if (keywords.has(param.name)) {
-        try writer.print("@\"{s}\"", .{param.name});
-    } else {
-        try writer.writeAll(param.name);
+    if (is_reserved) {
+        try writer.writeAll("@\"");
+    }
+    try writer.writeAll(param.name);
+    if (index) |idx| {
+        try writer.print("_{}", .{idx});
+    }
+
+    if (is_reserved) {
+        try writer.writeByte('"');
     }
 }
 
@@ -958,12 +965,20 @@ fn getRequirementSet(
 }
 
 pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
-    try writer.print("pub fn {s} (", .{command.name});
+    const command_name = if (std.mem.startsWith(u8, command.name, "gl"))
+        command.name[2..]
+    else
+        command.name;
+
+    try writer.print(
+        "pub fn {c}{s} (",
+        .{ std.ascii.toLower(command_name[0]), command_name[1..] },
+    );
 
     const param_len = command.params.items.len;
     if (param_len > 0) {
-        for (command.params.items[0 .. param_len - 1]) |param| {
-            try writeFunctionParameterName(param, writer);
+        for (command.params.items[0 .. param_len - 1], 0..) |param, idx| {
+            try writeFunctionParameterName(param, idx, writer);
             try writer.writeByte(':');
             if (param.group) |param_group| {
                 try writer.writeAll(param_group);
@@ -974,7 +989,7 @@ pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
         }
 
         const last_param = command.params.items[param_len - 1];
-        try writeFunctionParameterName(last_param, writer);
+        try writeFunctionParameterName(last_param, param_len - 1, writer);
         try writer.writeByte(':');
         if (last_param.group) |param_group| {
             try writer.writeAll(param_group);
@@ -983,16 +998,21 @@ pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
         }
     }
 
-    try writer.print(") callconv(.C) {s} {{\nreturn @call(.always_tail, current_proc_table.?.{s}.?, .{{", .{ command.return_type, command.name });
+    try writer.print(
+        \\) callconv(.C) {s} {{
+        \\    return @call(.always_tail, current_proc_table.?.{s}.?, .{{
+    ,
+        .{ command.return_type, command.name },
+    );
 
     if (param_len > 0) {
-        for (command.params.items[0 .. param_len - 1]) |param| {
-            try writeFunctionParameterName(param, writer);
+        for (command.params.items[0 .. param_len - 1], 0..) |param, idx| {
+            try writeFunctionParameterName(param, idx, writer);
             try writer.writeByte(',');
         }
 
         const last_param = command.params.items[param_len - 1];
-        try writeFunctionParameterName(last_param, writer);
+        try writeFunctionParameterName(last_param, param_len - 1, writer);
     }
     try writer.writeAll("});\n}\n");
 }
@@ -1093,9 +1113,10 @@ pub fn generateModule(
         \\/// Returns `true` if extension `name` is supported
         \\/// by current GL context
         \\pub fn extensionSupportedGL(name: []const u8) bool {
+        // TODO: Cache GL_EXTENSIONS string
         \\    // glGetString fails only when it's parameter names an invalid string
         \\    // here it will never fail unless GL context is broken.
-        \\    const ext_str = glGetString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
+        \\    const ext_str = getString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
         \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name);
         \\}
     );
