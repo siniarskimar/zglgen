@@ -34,7 +34,7 @@ After adding zglgen to your `build.zig.zon` use these two lines to get zglgen ex
 
 ```zig
 const zglgen_dep = b.dependency("zglgen", .{});
-const zglgen_exe = zglgen_Dep.artifact("zglgen");
+const zglgen_exe = zglgen_dep.artifact("zglgen");
 ```
 
 And use `std.Build.addRunArtifact` to generate bindings during build
