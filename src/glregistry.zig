@@ -191,6 +191,8 @@ pub const Registry = struct {
     }
 };
 
+/// Extracts information about a command from the given XmlTree and stores
+/// it in registry
 fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
@@ -247,7 +249,6 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
             try string_allocator.dupe(u8, buffer.items);
         buffer.clearRetainingCapacity();
 
-        // TODO: fill in group parameter
         try cmd.params.append(allocator, .{
             .name = param_name,
             .type = param_type,
@@ -262,6 +263,8 @@ fn extractCommand(registry: *Registry, tree: *xml.XmlTree) !void {
     try registry.commands.putNoClobber(allocator, cmd.name, cmd);
 }
 
+/// Extracts information about a constant from the given tag
+/// and stores it in registry
 pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
@@ -307,6 +310,8 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     try registry.enums.put(allocator, en.name, en);
 }
 
+/// Extracts information about given enum group and stores it in registry.
+/// An enum group is a `<enums group="name">` tag
 pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
@@ -324,6 +329,8 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     );
 }
 
+/// Extracts information about an extension, including it's requirements
+/// and stores it in the registry.
 pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
@@ -368,6 +375,17 @@ pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
     try registry.extensions.putNoClobber(allocator, ext.name, ext);
 }
 
+/// Extracts a requirement from a given XML element
+///
+/// A requirement is a <enum>, <command> or <type> tag in a <require> element:
+/// ```xml
+/// <feature ...>
+///    <require>
+///       <enum name="..."/>
+///       <type name="..."/>
+///       <command name="..."/>
+///    ...
+///```
 pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Element) !Registry.Requirement {
     const RequirementEnum = @typeInfo(Registry.Requirement).Union.tag_type.?;
 
@@ -387,6 +405,10 @@ pub fn extractRequirement(allocator: std.mem.Allocator, elem: *xml.XmlTree.Eleme
     };
 }
 
+/// Extracts information about a feature, including it's requirements, from a given XML tree and
+/// stores it in the registry
+///
+/// A feature is a combination of an api and number/version string
 pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
     const allocator = registry.allocator;
     const string_allocator = registry.string_arena.allocator();
@@ -573,6 +595,8 @@ pub fn parseRegistry(
     return registry;
 }
 
+/// Returns a number of bit shifts it takes for either `a` or `b` be equal to eachother.
+/// Expects that `a` and `b` are single bit bitmasks.
 fn shiftDistance(a: usize, b: usize) u6 {
     if (a == b) {
         return 0;
@@ -810,6 +834,10 @@ const MODULE_TYPE_PREAMPLE =
     \\pub const GETPROCADDRESSPROC = *const fn(procname: [*:0]const u8) callconv(.C) ?*const fn() callconv(.C) void;
 ;
 
+/// Translates a C type into a Zig type.
+///
+/// `allocator` is used for temporary allocations inside this function.
+/// Returned string is allocated using `string_allocator` and must be freed by the caller
 fn translateCType(
     allocator: std.mem.Allocator,
     string_allocator: std.mem.Allocator,
@@ -845,7 +873,10 @@ fn translateCType(
         }
     }
 
+    // left const to right const
     if (std.mem.eql(u8, tokens.items[0], "const")) {
+        // find first '*' and insert const before it
+        // if not found place const at the end
         const idx: usize = for (tokens.items[1..], 1..) |token, idx| {
             if (std.mem.eql(u8, token, "*")) {
                 break idx - 1;
@@ -938,6 +969,9 @@ const FeatureRef = struct {
 
 const RequirementSet = std.StringHashMap(Registry.Requirement);
 
+/// Obtains a set of requirements needed to generate
+/// a module up to a given feature.
+/// The returned value is owned by the caller.
 fn getRequirementSet(
     allocator: std.mem.Allocator,
     registry: *Registry,
@@ -1078,6 +1112,8 @@ fn writeEnum(@"enum": Registry.Enum, writer: anytype) !void {
     try writer.writeByte('\n');
 }
 
+/// Given a feature and a registry
+/// generates a bindings module and writes it to `writer`
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
