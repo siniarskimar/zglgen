@@ -362,8 +362,6 @@ pub const XmlTree = struct {
 /// If `root` is not null, makes an equivalent XmlTree.Element
 /// as a root of the tree.
 pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.StartTag) !XmlTree {
-    // TODO(1): Fix potential memory leaks due to allocation errors
-
     var tree = XmlTree{ .allocator = allocator };
     errdefer tree.deinit();
 
@@ -384,8 +382,7 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
         var elem = XmlTree.Element{
             .name = try allocator.dupe(u8, root.?.name),
         };
-
-        // #TODO(1) errdefer elem.deinit(allocator);
+        errdefer elem.deinit(allocator);
 
         var it = root.?.attributes.iterator();
         while (it.next()) |pair| {
@@ -443,7 +440,7 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
                 var elem = XmlTree.Element{
                     .name = try allocator.dupe(u8, tag.name),
                 };
-                // #TODO(1) errdefer elem.deinit(allocator);
+                errdefer elem.deinit(allocator);
 
                 var it = tag.attributes.iterator();
                 while (it.next()) |pair| {
