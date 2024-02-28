@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const AttributeMap = std.StringHashMapUnmanaged([]const u8);
+
 pub const XmlTag = union(enum) {
     xml_decl: XmlDecl,
     start_tag: StartTag,
@@ -9,7 +11,7 @@ pub const XmlTag = union(enum) {
     pub const StartTag = struct {
         name: []const u8,
         self_close: bool,
-        attributes: std.StringHashMapUnmanaged([]const u8) = .{},
+        attributes: AttributeMap = .{},
 
         pub fn deinit(self: *StartTag, allocator: std.mem.Allocator) void {
             self.attributes.deinit(allocator);
@@ -26,25 +28,27 @@ pub const XmlTag = union(enum) {
 };
 
 /// Read a tag or attribute name.
-/// If `buffer` is null, skips name.
+/// Output can be ignored when `writer` is void.
+/// Returns a stop character.
 /// regex: `[:_A-Za-z][\-\.:_0-9A-Za-z]*`
-fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
+fn readXmlName(reader: anytype, writer: anytype) !u8 {
+    const skip = @TypeOf(writer) == type and writer == void;
+    // @compileLog(@TypeOf(writer), skip);
+
     switch (try reader.readByte()) {
         ':',
         'A'...'Z',
         '_',
         'a'...'z',
         => |c| {
-            if (buffer) |b| {
-                b[0] = c;
+            if (!skip) {
+                try writer.writeByte(c);
             }
         },
-        else => return error.InvalidNameChar,
+        else => return error.InvalidChar,
     }
-    var idx: usize = 1;
     while (true) {
         const c = try reader.readByte();
-        idx += 1;
         switch (c) {
             '-',
             '.',
@@ -54,21 +58,48 @@ fn readXmlName(reader: anytype, buffer: ?[]u8) !usize {
             '_',
             'a'...'z',
             => {
-                if (buffer) |b| {
-                    if (idx >= b.len) {
-                        return error.NameTooLong;
-                    }
-                    b[0] = c;
+                if (!skip) {
+                    try writer.writeByte(c);
                 }
             },
-            ' ', '\n', '\t', '\r' => break,
+            ' ', '\n', '\t', '\r', '=', '/' => |stop| return stop,
             else => return error.InvalidChar,
         }
     }
-    return idx;
 }
 
-/// Skips whitespace.
+test "readXmlName" {
+    const testing = std.testing;
+
+    var buffer = [_]u8{0} ** 40;
+    {
+        var in_buffer = "foo=\"value\"";
+        var in_stream = std.io.fixedBufferStream(in_buffer);
+        var out_stream = std.io.fixedBufferStream(&buffer);
+
+        try testing.expectEqual(@as(u8, '='), try readXmlName(in_stream.reader(), out_stream.writer()));
+        try testing.expectEqualSlices(u8, "foo", buffer[0..out_stream.pos]);
+    }
+    {
+        var in_buffer = "foo/>";
+        var in_stream = std.io.fixedBufferStream(in_buffer);
+        var out_stream = std.io.fixedBufferStream(&buffer);
+
+        try testing.expectEqual(@as(u8, '/'), try readXmlName(in_stream.reader(), out_stream.writer()));
+        try testing.expectEqualSlices(u8, "foo", buffer[0..out_stream.pos]);
+    }
+    {
+        var in_buffer = "foo\n/>";
+        var in_stream = std.io.fixedBufferStream(in_buffer);
+        var out_stream = std.io.fixedBufferStream(&buffer);
+
+        try testing.expectEqual(@as(u8, '\n'), try readXmlName(in_stream.reader(), out_stream.writer()));
+        try testing.expectEqualSlices(u8, "foo", buffer[0..out_stream.pos]);
+    }
+}
+
+/// Skips whitespace and returns last character
+/// this function consumed
 /// regex: `[ \n\t\r]*`
 fn skipWhitespace(reader: anytype) !u8 {
     while (true) switch (try reader.readByte()) {
@@ -77,70 +108,114 @@ fn skipWhitespace(reader: anytype) !u8 {
     };
 }
 
-// TODO: Make this method return StringHashMapUnmanaged
-// TODO: Do not depend on FixedBufferStream in this method
 /// Parse a set of XML tag attributes.
-fn parseXmlTagAttributes(comptime TagType: type, tag: *TagType, allocator: std.mem.Allocator, stream: anytype, reader: anytype) !void {
-    switch (TagType) {
-        XmlTag.StartTag, XmlTag.XmlDecl => {},
-        else => @compileError(@typeName(TagType) ++ " does not accept attributes"),
-    }
-    const buffer = stream.buffer;
+/// Keys and values in the resulting attribute map are slices of `buffer`.
+fn parseXmlTagAttributes(allocator: std.mem.Allocator, buffer: []const u8) !AttributeMap {
+    var attr_map: AttributeMap = .{};
+    errdefer attr_map.deinit(allocator);
+
+    var stream = std.io.fixedBufferStream(buffer);
 
     while (true) {
-        const ch = skipWhitespace(reader) catch |err| switch (err) {
+        const ch = skipWhitespace(stream.reader()) catch |err| switch (err) {
             error.EndOfStream => break,
             else => return err,
         };
-        if (stream.pos == buffer.len) switch (TagType) {
-            XmlTag.StartTag => if (ch == '/') {
-                tag.self_close = true;
-                break;
-            } else return error.InvalidChar,
 
-            XmlTag.XmlDecl => if (ch == '?')
+        if (stream.pos == buffer.len) {
+            if (ch == '/' or ch == '?')
                 break
             else
-                return error.InvalidChar,
-            else => unreachable,
-        };
+                return error.InvalidChar;
+        }
+
+        if (ch == '=') {
+            return error.ExpectedAttrName;
+        }
+
         try stream.seekBy(-1);
 
         const attrname_start = stream.pos;
-        const attrname_len = readXmlName(reader, null) catch |err| switch (err) {
-            error.InvalidChar => if (buffer[stream.pos - 1] == '=')
-                stream.pos - attrname_start
-            else
-                return err,
+        const name_stop_char = try readXmlName(stream.reader(), void);
+        const attrname_end = stream.pos - 1;
 
+        if (name_stop_char == '/') {
+            return error.AttributeWithoutValue;
+        }
+
+        const maybe_quote = skipWhitespace(stream.reader()) catch |err| switch (err) {
+            error.EndOfStream => return error.ExpectedAttrValue,
             else => return err,
         };
-
-        const maybe_quote = try skipWhitespace(reader);
-        const quote = if (maybe_quote == '=') try skipWhitespace(reader) else maybe_quote;
+        const quote = if (maybe_quote == '=') try skipWhitespace(stream.reader()) else maybe_quote;
 
         if (quote != '\'' and quote != '"') {
             return error.InvalidChar;
         }
-        const attrvalue_start = stream.pos;
-        try reader.skipUntilDelimiterOrEof(quote);
-        const attrvalue_len = stream.pos - attrvalue_start;
 
-        const attrname = buffer[attrname_start .. attrname_start + attrname_len - 1];
-        const attrvalue = buffer[attrvalue_start .. attrvalue_start + attrvalue_len - 1];
-        switch (TagType) {
-            XmlTag.StartTag => try tag.attributes.put(allocator, attrname, attrvalue),
-            XmlTag.XmlDecl => {
-                if (std.mem.eql(u8, attrname, "version")) {
-                    var it = std.mem.splitScalar(u8, attrvalue, '.');
-                    const major = try std.fmt.parseInt(u32, it.next() orelse "0", 10);
-                    const minor = try std.fmt.parseInt(u32, it.next() orelse "0", 10);
-                    tag.version = std.SemanticVersion{ .major = major, .minor = minor, .patch = 0 };
-                }
-            },
-            else => unreachable,
-        }
+        const attrvalue_start = stream.pos;
+        try stream.reader().skipUntilDelimiterOrEof(quote);
+        const attrvalue_end = stream.pos - 1;
+
+        const attrname = buffer[attrname_start..attrname_end];
+        const attrvalue = buffer[attrvalue_start..attrvalue_end];
+
+        try attr_map.put(allocator, attrname, attrvalue);
     }
+
+    return attr_map;
+}
+
+test "parseXmlTagAttributes" {
+    const test_allocator = std.testing.allocator;
+    {
+        var attr_map = try parseXmlTagAttributes(test_allocator, " ");
+        defer attr_map.deinit(test_allocator);
+
+        try std.testing.expectEqual(@as(usize, 0), attr_map.count());
+    }
+    {
+        var attr_map = try parseXmlTagAttributes(test_allocator, " name='Joe'");
+        defer attr_map.deinit(test_allocator);
+
+        const name = attr_map.get("name");
+
+        try std.testing.expectEqual(@as(usize, 1), attr_map.count());
+        try std.testing.expect(name != null);
+        try std.testing.expectEqualSlices(u8, "Joe", name.?);
+    }
+    {
+        var attr_map = try parseXmlTagAttributes(test_allocator, " attr1= \"foo\" attr2 =\"bar\"");
+        defer attr_map.deinit(test_allocator);
+
+        const attr1 = attr_map.get("attr1");
+        const attr2 = attr_map.get("attr2");
+
+        try std.testing.expectEqual(@as(usize, 2), attr_map.count());
+        try std.testing.expect(attr1 != null);
+        try std.testing.expect(attr2 != null);
+        try std.testing.expectEqualSlices(u8, "foo", attr1.?);
+        try std.testing.expectEqualSlices(u8, "bar", attr2.?);
+    }
+    {
+        var attr_map = try parseXmlTagAttributes(test_allocator, "attr1=\"foo\" ");
+        defer attr_map.deinit(test_allocator);
+
+        const attr1 = attr_map.get("attr1");
+
+        try std.testing.expectEqual(@as(usize, 1), attr_map.count());
+        try std.testing.expect(attr1 != null);
+        try std.testing.expectEqualSlices(u8, "foo", attr1.?);
+    }
+}
+
+test "(errors) parseXmlTagAttributes" {
+    const test_allocator = std.testing.allocator;
+
+    try std.testing.expectError(error.ExpectedAttrName, parseXmlTagAttributes(test_allocator, " ='Joe'"));
+    try std.testing.expectError(error.ExpectedAttrValue, parseXmlTagAttributes(test_allocator, " name="));
+    try std.testing.expectError(error.InvalidChar, parseXmlTagAttributes(test_allocator, " 'Joe'"));
+    try std.testing.expectError(error.InvalidChar, parseXmlTagAttributes(test_allocator, " name = /value/"));
 }
 
 /// Parse a singular XML tag.
@@ -151,18 +226,41 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     var stream = std.io.fixedBufferStream(buffer);
     const reader = stream.reader();
 
+    // var name_buffer = [_]u8{0} ** 50;
+
     switch (try reader.readByte()) {
         '?' => {
-            var tag = XmlTag.XmlDecl{};
             const name = try reader.readBytesNoEof(3);
             if (!std.mem.eql(u8, &name, "xml")) {
                 return error.UnknownTag;
             }
-            try parseXmlTagAttributes(XmlTag.XmlDecl, &tag, allocator, &stream, reader);
-            return .{ .xml_decl = tag };
+            if (buffer[buffer.len - 1] != '?') {
+                return error.UnknownTag;
+            }
+
+            var attr_map = try parseXmlTagAttributes(allocator, buffer[4..]);
+            defer attr_map.deinit(allocator);
+
+            if (attr_map.get("version")) |version| {
+                var it = std.mem.splitScalar(u8, version, '.');
+                const major_str = it.next() orelse return error.BadXmlDeclVersion;
+                const minor_str = it.next() orelse return error.BadXmlDeclVersion;
+
+                if (it.next()) |_| return error.BadXmlVersion;
+
+                const ver = std.SemanticVersion{
+                    .major = try std.fmt.parseInt(usize, major_str, 10),
+                    .minor = try std.fmt.parseInt(usize, minor_str, 10),
+                    .patch = 0,
+                };
+
+                return .{ .xml_decl = .{ .version = ver } };
+            } else {
+                return error.XmlDeclWithoutVersion;
+            }
         },
         '/' => {
-            const name_len = readXmlName(reader, null) catch |err| switch (err) {
+            const name_len = readXmlName(reader, void) catch |err| switch (err) {
                 error.EndOfStream => buffer.len,
                 else => return err,
             };
@@ -198,28 +296,45 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
                 return error.UnknownTag;
             }
             try stream.seekBy(-1);
-            const name_len = readXmlName(reader, null) catch |err| switch (err) {
-                error.EndOfStream => buffer.len + 1,
-                error.InvalidChar => if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/')
-                    buffer.len
-                else
-                    return err,
+
+            var counting_reader = std.io.countingReader(reader);
+
+            const name_stop = readXmlName(counting_reader.reader(), void) catch |err| switch (err) {
+                error.EndOfStream => return .{ .start_tag = .{ .name = buffer[0..counting_reader.bytes_read], .self_close = false } },
                 else => return err,
             };
-            const name = buffer[0 .. name_len - 1];
+            const name = buffer[0 .. counting_reader.bytes_read - 1];
 
-            // <element attr="v1" .. > or <element attr="v1" .. />
-            var tag = XmlTag.StartTag{ .name = name, .self_close = false };
-            errdefer tag.deinit(allocator);
-            if (stream.pos == buffer.len and buffer[buffer.len - 1] == '/') {
-                tag.self_close = true;
-                return .{ .start_tag = tag };
+            if (stream.pos != buffer.len and name_stop == '/') {
+                return error.InvalidChar;
             }
 
-            try parseXmlTagAttributes(XmlTag.StartTag, &tag, allocator, &stream, reader);
-
-            return .{ .start_tag = tag };
+            return .{ .start_tag = .{
+                .name = name,
+                .self_close = std.mem.endsWith(u8, buffer, "/"),
+                .attributes = try parseXmlTagAttributes(allocator, buffer[counting_reader.bytes_read..]),
+            } };
         },
+    }
+}
+
+test "parseXmlTag" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    {
+        var tag = try parseXmlTag(allocator, "name/");
+        defer if (tag == .start_tag) tag.start_tag.deinit(allocator);
+
+        try testing.expect(tag == .start_tag);
+        try testing.expectEqualSlices(u8, "name", tag.start_tag.name);
+    }
+    {
+        var tag = try parseXmlTag(allocator, "name value=\"\"/");
+        defer if (tag == .start_tag) tag.start_tag.deinit(allocator);
+
+        try testing.expect(tag == .start_tag);
+        try testing.expectEqualSlices(u8, "name", tag.start_tag.name);
+        try testing.expectEqual(@as(@TypeOf(tag.start_tag.attributes).Size, 1), tag.start_tag.attributes.count());
     }
 }
 
@@ -421,8 +536,8 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
         // and make sure we have read a full comment tag incase a comment contains a valid
         // xml tag
         // eg. <!-- <element attr1=""/> -->
-        if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
-            while (!std.mem.eql(u8, read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len], "--")) {
+        if (std.mem.startsWith(u8, read_buffer.items, "!--")) {
+            while (!std.mem.endsWith(u8, read_buffer.items, "--")) {
                 try read_buffer.append('>');
                 try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
             }
@@ -478,7 +593,8 @@ pub fn parseXml(allocator: std.mem.Allocator, reader: anytype, root: ?XmlTag.Sta
     if (element_stack.items.len != 0) return error.UnenclosedTags;
     return tree;
 }
-test "xml_decl" {
+
+test "(xml_decl) parseXml" {
     {
         const buffer =
             \\<?xml version="1.0"?>
@@ -505,7 +621,7 @@ test "xml_decl" {
     }
 }
 
-test "attributes" {
+test "(attributes) parseXml" {
     const buffer =
         \\<?xml version="1.0"?>
         \\<root>
@@ -525,7 +641,7 @@ test "attributes" {
     try std.testing.expectEqualSlices(u8, "value1", attr1.?);
 }
 
-test "text content" {
+test "(text content) parseXml" {
     const buffer =
         \\<?xml version="1.0"?>
         \\<root>
