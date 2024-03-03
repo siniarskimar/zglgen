@@ -77,9 +77,11 @@ pub fn main() !void {
         std.log.info("OpenGL {s}\n", .{version_str});
     }
 
-    gl.enable(gl.GL_DEBUG_OUTPUT);
-    gl.debugMessageCallback(glMessageCallback, null);
-    gl.debugMessageControl(gl.GL_DONT_CARE, gl.GL_DONT_CARE, gl.GL_DONT_CARE, 0, null, gl.GL_TRUE);
+    if (gl.loadGL_KHR_DEBUG(gl.getProcTablePtr().?, glfw.glfwGetProcAddress)) {
+        gl.enable(gl.GL_DEBUG_OUTPUT);
+        gl.debugMessageCallback(glMessageCallback, null);
+        gl.debugMessageControl(gl.GL_DONT_CARE, gl.GL_DONT_CARE, gl.GL_DONT_CARE, 0, null, gl.GL_TRUE);
+    } else |_| {}
 
     var program: gl.GLuint = gl.createProgram();
     {
