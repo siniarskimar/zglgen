@@ -169,20 +169,21 @@ pub const Registry = struct {
         std.sort.heapContext(0, self.features.items.len, SortCtx{ .items = self.features.items });
     }
 
-    pub fn getFeatureRange(self: *@This(), api: Registry.Feature.Api) []Registry.Feature {
+    pub fn getFeatureRange(self: *@This(), api: Registry.Feature.Api) ?[]Registry.Feature {
         self.sortFeatures();
         const feature_start = for (self.features.items, 0..) |feat, idx| {
             if (feat.api == api) {
                 break idx;
             }
-        } else unreachable;
+        } else return null;
 
         const feature_end = for (self.features.items[feature_start..], feature_start..) |feat, idx| {
             if (feat.api != api) {
                 break idx;
             }
-        } else unreachable;
+        } else self.features.items.len;
 
+        // inclusive start exclusive end, [start; end)
         return self.features.items[feature_start..feature_end];
     }
     pub fn getFeature(self: @This(), feature: FeatureKey) ?Feature {
@@ -950,7 +951,7 @@ fn getRequirementSet(
 
     const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
 
-    const feature_range = registry.getFeatureRange(api_ref);
+    const feature_range = registry.getFeatureRange(api_ref) orelse return error.FeatureNotFound;
     for (feature_range) |feature| {
         if (feature.number.order(feature_ref.number) == .gt) {
             break;
@@ -1178,7 +1179,7 @@ pub fn generateModule(
         \\
     );
 
-    const feature_range = registry.getFeatureRange(feature_ref.api);
+    const feature_range = registry.getFeatureRange(feature_ref.api) orelse return error.FeatureNotFound;
     for (feature_range) |feature| {
         if (feature.number.order(feature_ref.number) == .gt) {
             continue;
