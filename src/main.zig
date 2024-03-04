@@ -2,6 +2,7 @@ const std = @import("std");
 const clap = @import("clap");
 const builtin = @import("builtin");
 const glregistry = @import("./glregistry.zig");
+const zig_generator = @import("./zig_generator.zig");
 
 pub const std_options = struct {
     pub const log_level = std.log.Level.info;
@@ -247,7 +248,7 @@ pub fn main() !void {
         );
     };
 
-    try glregistry.generateModule(
+    try zig_generator.generateModule(
         gpallocator,
         &registry,
         .{ .api = apispec.api, .number = apispec.version },
