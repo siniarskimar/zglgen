@@ -177,7 +177,7 @@ pub const Registry = struct {
             }
         } else unreachable;
 
-        const feature_end = for (self.features.items, feature_start..) |feat, idx| {
+        const feature_end = for (self.features.items[feature_start..], feature_start..) |feat, idx| {
             if (feat.api != api) {
                 break idx;
             }
@@ -1150,6 +1150,8 @@ pub fn generateModule(
 
     var requirements = try resolveRequirements(allocator, registry, requirement_set);
     defer requirements.deinit();
+
+    std.log.info("Generating {} enums, {} commands", .{ requirements.enums.items.len, requirements.commands.items.len });
 
     // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMPLE);
