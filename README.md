@@ -64,6 +64,10 @@ your_exe.addModule("gl", gl_bindings);
 
 For example on how to use a generated module see [examples/triangle.zig](./examples/triangle.zig)
 
+**NOTE**: Consider building zglgen with `ReleaseSafe` optimization.
+In `Debug`, zglgen uses `std.GeneralPurposeAllocator` which is **really slow**.
+In `ReleaseSafe` mode, zglgen will link with C standard library and use `std.heap.c_allocator` which is substantially faster.
+
 ## FAQ
 
 ### Why the procedure table is `thread_local`?
