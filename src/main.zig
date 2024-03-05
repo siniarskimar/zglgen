@@ -9,10 +9,22 @@ pub const std_options = struct {
 };
 
 fn printHelp(params: []const clap.Param(clap.Help)) !void {
-    try clap.usage(std.io.getStdErr().writer(), clap.Help, params);
-    try std.io.getStdErr().writer().writeByte('\n');
+    const stderr = std.io.getStdErr();
+    const writer = stderr.writer();
 
-    try clap.help(std.io.getStdErr().writer(), clap.Help, params, .{});
+    try clap.usage(writer, clap.Help, params);
+    try writer.writeByte('\n');
+
+    try clap.help(writer, clap.Help, params, .{});
+
+    try writer.writeAll(
+        \\<apispec> is a combination of <api>:<version>
+        \\<api> has to be one of:
+        \\
+    );
+    inline for (std.meta.fields(glregistry.Registry.Feature.Api)) |field| {
+        try writer.writeAll(std.fmt.comptimePrint(" - {s}\n", .{field.name}));
+    }
 }
 
 const clap_parsers = struct {
