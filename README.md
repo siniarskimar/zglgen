@@ -2,6 +2,12 @@
 
 OpenGL bindings generator fully written in Zig. Currently targets Zig 0.11.0.
 
+Supports generating bindings for all versions of:
+ - OpenGL
+ - OpenGL Core
+ - OpenGL ES
+ - OpenGL SC
+
 ![hello world triangle](./examples/triangle.png)
 
 ## Usage
@@ -11,7 +17,7 @@ OpenGL bindings generator fully written in Zig. Currently targets Zig 0.11.0.
 Up-to-date documentation on command line options can be found by running `zglgen -h`.
 
 ```
-[-h] [-o <file>] [--api <apispec>] [--registry <file>] <extension>...
+[-hc] [-o <file>] [--api <apispec>] [--registry <file>] <extension>...
     -h, --help
             Show this help message
 
@@ -23,6 +29,9 @@ Up-to-date documentation on command line options can be found by running `zglgen
 
         --registry <file>
             File path to OpenGL registry (default: downloads https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml)
+
+    -c, --no-cache
+            Disables caching of GL registry
 
     <extension>...
             Additional extensions
