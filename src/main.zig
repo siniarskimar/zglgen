@@ -95,15 +95,55 @@ fn getCacheDirPath(allocator: std.mem.Allocator) ![]const u8 {
     }
 }
 
-fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const u8 {
+fn findProgramInPath(allocator: std.mem.Allocator, program_name: []const u8) !?[]const u8 {
+    var envmap = try std.process.getEnvMap(allocator);
+    defer envmap.deinit();
+
+    var buffer = std.ArrayList(u8).init(allocator);
+    defer buffer.deinit();
+
+    var fba_buffer = [_]u8{0} ** 512;
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
+
+    const env_path = envmap.get("PATH") orelse return error.EnvPathNotSet;
+
+    try buffer.appendSlice(program_name);
+    if (builtin.os.tag == .windows) {
+        try buffer.appendSlice(".exe");
+    }
+
+    var it = std.mem.splitScalar(
+        u8,
+        env_path,
+        if (builtin.os.tag == .windows) ';' else ':',
+    );
+
+    while (it.next()) |path_seg| {
+        const candidate = try std.fs.path.join(fba.allocator(), &[_][]const u8{ path_seg, buffer.items });
+        defer fba.allocator().free(candidate);
+
+        const file = std.fs.openFileAbsolute(candidate, .{}) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer file.close();
+
+        buffer.clearRetainingCapacity();
+        try buffer.appendSlice(candidate);
+        break;
+    }
+
+    return try buffer.toOwnedSlice();
+}
+
+fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) !std.io.StreamSource {
     const MAX_SIZE = 5 * 1024 * 1024; // 5 MiB
 
     if (filepath) |fp| {
         std.log.info("Using '{s}' as registry", .{fp});
         var file = try std.fs.cwd().openFile(fp, .{});
-        defer file.close();
 
-        return try file.readToEndAlloc(allocator, MAX_SIZE);
+        return .{ .file = file };
     }
     const cache_dir_path = try getCacheDirPath(allocator);
     defer allocator.free(cache_dir_path);
@@ -123,12 +163,15 @@ fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const 
                 error.FileNotFound => break :blk,
                 else => return err,
             };
-            defer cached_file.close();
+            errdefer cached_file.close();
             const stat = try cached_file.stat();
-            if (stat.mtime + std.time.ns_per_day > std.time.nanoTimestamp()) {
-                std.log.info("Using a cached GL registry", .{});
-                return try cached_file.readToEndAlloc(allocator, MAX_SIZE);
+
+            const up_to_date = stat.mtime + std.time.ns_per_day > std.time.nanoTimestamp();
+            if (up_to_date) {
+                std.log.info("Using cached GL registry", .{});
+                return .{ .file = cached_file };
             }
+            cached_file.close();
         }
     }
 
@@ -138,33 +181,67 @@ fn loadGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) ![]const 
     // In 0.12.0 the following code is replaced by std.http.Client.fetch
 
     const uri = comptime try std.Uri.parse("https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml");
+    var response_buffer = std.ArrayList(u8).init(allocator);
+    defer response_buffer.deinit();
+
+    var stderr = std.ArrayList(u8).init(allocator);
+    defer stderr.deinit();
 
     std.log.info("Fetching {s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path });
 
-    var headers = std.http.Headers{ .allocator = allocator };
-    defer headers.deinit();
+    const curl_path = try findProgramInPath(allocator, "curl");
+    defer if (curl_path) |p| allocator.free(p);
 
-    try headers.append("accept", "*/*");
+    if (curl_path) |prog_path| {
+        var process = std.process.Child.init(&[_][]const u8{
+            prog_path,
+            std.fmt.comptimePrint("{s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path }),
+        }, allocator);
+        process.stdout_behavior = .Pipe;
+        process.stderr_behavior = .Pipe;
 
-    var request = try http.request(.GET, uri, headers, .{});
-    defer request.deinit();
+        try process.spawn();
+        try process.collectOutput(&response_buffer, &stderr, MAX_SIZE);
 
-    try request.start();
-    try request.wait();
+        const term = try process.wait();
+        if (term != .Exited or term == .Exited and term.Exited != 0) {
+            std.log.err("curl exited abnormaly: \n{s}", .{stderr.items});
+            return error.FetchFail;
+        }
+    } else {
+        const wget_path = try findProgramInPath(allocator, "wget") orelse {
+            std.log.err("Cannot download GL registry, no 'curl' or 'wget' found in $PATH", .{});
+            return error.PathSearchFail;
+        };
+        defer allocator.free(wget_path);
 
-    std.log.info("Fetch done", .{});
+        var process = std.process.Child.init(&[_][]const u8{
+            wget_path,
+            std.fmt.comptimePrint("{s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path }),
+            "-O",
+            "-",
+        }, allocator);
+        process.stdout_behavior = .Pipe;
+        process.stderr_behavior = .Pipe;
 
-    const reader = request.reader();
-    const response = try reader.readAllAlloc(allocator, MAX_SIZE);
+        try process.spawn();
+        try process.collectOutput(&response_buffer, &stderr, MAX_SIZE);
+
+        const term = try process.wait();
+        if (term != .Exited or term == .Exited and term.Exited != 0) {
+            std.log.err("wget exited abnormaly: \n{s}", .{stderr.items});
+            return error.FetchFail;
+        }
+    }
 
     if (cache_dir) |dir| {
         const file = try dir.createFile("gl.xml", .{});
         defer file.close();
 
-        try file.writeAll(response);
+        try file.writeAll(response_buffer.items);
     }
 
-    return response;
+    return .{ .buffer = std.io.fixedBufferStream(try response_buffer.toOwnedSlice()) };
 }
 
 pub fn main() !void {
@@ -213,14 +290,17 @@ pub fn main() !void {
     };
 
     const cwd = std.fs.cwd();
-    const registry_buffer = try loadGlRegistry(gpallocator, res.args.registry);
-    defer gpallocator.free(registry_buffer);
+    var registry_stream = try getGlRegistry(gpallocator, res.args.registry);
+    defer switch (registry_stream) {
+        .buffer => |*fba| gpallocator.free(fba.buffer),
+        else => {},
+    };
 
-    var registry_buffer_stream = std.io.fixedBufferStream(registry_buffer);
+    var buffered_registry_stream = std.io.bufferedReader(registry_stream.reader());
 
     var registry = try glregistry.parseRegistry(
         gpallocator,
-        registry_buffer_stream.reader(),
+        buffered_registry_stream.reader(),
     );
     defer registry.deinit();
 
