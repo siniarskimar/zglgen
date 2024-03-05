@@ -136,7 +136,7 @@ fn findProgramInPath(allocator: std.mem.Allocator, program_name: []const u8) !?[
     return try buffer.toOwnedSlice();
 }
 
-fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) !std.io.StreamSource {
+fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: bool) !std.io.StreamSource {
     const MAX_SIZE = 5 * 1024 * 1024; // 5 MiB
 
     if (filepath) |fp| {
@@ -151,14 +151,16 @@ fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) !std.io.St
     var cache_dir: ?std.fs.Dir = std.fs.openDirAbsolute(cache_dir_path, .{}) catch |err| switch (err) {
         error.FileNotFound => try std.fs.cwd().makeOpenPath(cache_dir_path, .{}),
         else => blk: {
-            std.log.warn("Failed to open cache directory {s}, cache disabled {s}", .{ cache_dir_path, @errorName(err) });
+            if (!no_cache) {
+                std.log.warn("Failed to open cache directory {s}, cache disabled {s}", .{ cache_dir_path, @errorName(err) });
+            }
             break :blk null;
         },
     };
     defer if (cache_dir) |*dir| dir.close();
 
     blk: {
-        if (cache_dir) |dir| {
+        if (!no_cache) if (cache_dir) |dir| {
             const cached_file = dir.openFile("gl.xml", .{}) catch |err| switch (err) {
                 error.FileNotFound => break :blk,
                 else => return err,
@@ -172,7 +174,7 @@ fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8) !std.io.St
                 return .{ .file = cached_file };
             }
             cached_file.close();
-        }
+        };
     }
 
     var http = std.http.Client{ .allocator = allocator };
@@ -251,7 +253,8 @@ pub fn main() !void {
         \\-o, --output <file>  Destination path for the generated module (default: prints to stdout)
         \\--api <apispec>      Api to generate
         \\--registry <file>    File path to OpenGL registry (default: downloads https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml)
-        \\<extension>...        Additional extensions
+        \\-c, --no-cache       Disables caching of GL registry
+        \\<extension>...       Additional extensions
     );
     const use_c_allocator = builtin.link_libc and builtin.mode != .Debug;
 
@@ -290,7 +293,7 @@ pub fn main() !void {
     };
 
     const cwd = std.fs.cwd();
-    var registry_stream = try getGlRegistry(gpallocator, res.args.registry);
+    var registry_stream = try getGlRegistry(gpallocator, res.args.registry, res.args.@"no-cache" == 0);
     defer switch (registry_stream) {
         .buffer => |*fba| gpallocator.free(fba.buffer),
         else => {},
