@@ -551,7 +551,7 @@ pub fn generateModule(
         \\    // glGetString fails only when it's parameter names an invalid string
         \\    // here it will never fail unless GL context is broken.
         \\    const ext_str = getString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
-        \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name);
+        \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name) != null;
         \\}
     );
 }
