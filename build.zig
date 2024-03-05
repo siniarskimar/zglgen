@@ -51,7 +51,7 @@ fn buildExamples(
 
     const zglgen_cmd = b.addRunArtifact(zglgen);
     zglgen_cmd.addArg("-o");
-    const generated_path = zglgen_cmd.addPrefixedOutputFileArg("", "gl_3_2.zig");
+    const generated_path = zglgen_cmd.addOutputFileArg("gl_3_2.zig");
     zglgen_cmd.addArgs(&[_][]const u8{ "--api", "gl:3.2" });
     zglgen_cmd.addArg("GL_KHR_debug");
 
