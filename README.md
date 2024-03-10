@@ -1,6 +1,6 @@
 # zglgen
 
-OpenGL bindings generator fully written in Zig. Currently targets Zig 0.11.0.
+OpenGL bindings generator fully written in Zig.
 
 Supports generating bindings for all versions of:
  - OpenGL
@@ -11,6 +11,10 @@ Supports generating bindings for all versions of:
 ![hello world triangle](./examples/triangle.png)
 
 ## Usage
+
+The main branch of zglgen tries to work with latest working zig version.
+
+If you perfer working with official releases of zig, checkout `zig-<your_version>` tag.
 
 ### Command line
 
