@@ -73,7 +73,7 @@ test "readXmlName" {
 
     var buffer = [_]u8{0} ** 40;
     {
-        var in_buffer = "foo=\"value\"";
+        const in_buffer = "foo=\"value\"";
         var in_stream = std.io.fixedBufferStream(in_buffer);
         var out_stream = std.io.fixedBufferStream(&buffer);
 
@@ -81,7 +81,7 @@ test "readXmlName" {
         try testing.expectEqualSlices(u8, "foo", buffer[0..out_stream.pos]);
     }
     {
-        var in_buffer = "foo/>";
+        const in_buffer = "foo/>";
         var in_stream = std.io.fixedBufferStream(in_buffer);
         var out_stream = std.io.fixedBufferStream(&buffer);
 
@@ -89,7 +89,7 @@ test "readXmlName" {
         try testing.expectEqualSlices(u8, "foo", buffer[0..out_stream.pos]);
     }
     {
-        var in_buffer = "foo\n/>";
+        const in_buffer = "foo\n/>";
         var in_stream = std.io.fixedBufferStream(in_buffer);
         var out_stream = std.io.fixedBufferStream(&buffer);
 

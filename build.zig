@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("clap", zig_clap.module("clap"));
+    exe.root_module.addImport("clap", zig_clap.module("clap"));
     exe.linkLibC();
     b.installArtifact(exe);
 
@@ -56,7 +56,7 @@ fn buildExamples(
     zglgen_cmd.addArg("GL_KHR_debug");
 
     const gen_module = b.createModule(.{
-        .source_file = generated_path,
+        .root_source_file = generated_path,
     });
 
     const example_triangle = b.addExecutable(.{
@@ -67,10 +67,10 @@ fn buildExamples(
     });
     example_triangle.linkSystemLibrary("glfw");
     example_triangle.linkLibC();
-    example_triangle.addModule("gl", gen_module);
+    example_triangle.root_module.addImport("gl", gen_module);
 
     const run_example_triangle = b.addRunArtifact(example_triangle);
-    run_example_triangle.cwd = b.pathFromRoot("examples/");
+    run_example_triangle.cwd = .{ .path = b.pathFromRoot("examples/") };
 
     if (install_examples) {
         b.installArtifact(example_triangle);

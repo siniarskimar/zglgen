@@ -4,8 +4,8 @@ const builtin = @import("builtin");
 const glregistry = @import("./glregistry.zig");
 const zig_generator = @import("./zig_generator.zig");
 
-pub const std_options = struct {
-    pub const log_level = std.log.Level.info;
+pub const std_options = std.Options{
+    .log_level = .info,
 };
 
 fn printHelp(params: []const clap.Param(clap.Help)) !void {
@@ -153,7 +153,7 @@ fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: 
 
     if (filepath) |fp| {
         std.log.info("Using '{s}' as registry", .{fp});
-        var file = try std.fs.cwd().openFile(fp, .{});
+        const file = try std.fs.cwd().openFile(fp, .{});
 
         return .{ .file = file };
     }

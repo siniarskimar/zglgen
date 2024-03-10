@@ -18,8 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.11.0
       - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
       - run: zig build
   compile-release:
@@ -28,8 +26,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.11.0
       - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
       - run: zig build -Doptimize=ReleaseSafe
   test:
@@ -37,16 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.11.0
       - run: zig build test
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.11.0
       - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
       - run: zig fmt --check src/*.zig
   test-generation:
@@ -54,8 +46,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.11.0
       - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
       - run: zig build -Doptimize=ReleaseSafe
       - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
