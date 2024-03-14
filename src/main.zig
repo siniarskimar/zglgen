@@ -305,7 +305,7 @@ pub fn main() !void {
     };
 
     const cwd = std.fs.cwd();
-    var registry_stream = try getGlRegistry(gpallocator, res.args.registry, res.args.@"no-cache" == 0);
+    var registry_stream = try getGlRegistry(gpallocator, res.args.registry, res.args.@"no-cache" != 0);
     defer switch (registry_stream) {
         .buffer => |*fba| gpallocator.free(fba.buffer),
         else => {},
