@@ -558,7 +558,7 @@ pub fn parseRegistry(
                         .enums => try extractEnumGroup(&registry, tag),
                         .feature => {
                             var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.free_all);
+                            defer _ = tree_arena.reset(.retain_capacity);
                             defer _ = element_stack.pop();
 
                             try extractFeature(&registry, &tree);
@@ -573,7 +573,7 @@ pub fn parseRegistry(
                     .commands => switch (elemtag) {
                         .command => {
                             var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.free_all);
+                            defer _ = tree_arena.reset(.retain_capacity);
                             defer _ = element_stack.pop();
 
                             try extractCommand(&registry, &tree);
@@ -586,7 +586,7 @@ pub fn parseRegistry(
                                 continue;
                             }
                             var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.free_all);
+                            defer _ = tree_arena.reset(.retain_capacity);
                             defer _ = element_stack.pop();
 
                             try extractExtension(&registry, &tree);
