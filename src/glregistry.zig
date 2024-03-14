@@ -509,6 +509,10 @@ pub fn parseRegistry(
     var read_buffer = std.ArrayList(u8).init(allocator);
     defer read_buffer.deinit();
 
+    var tree_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer tree_arena.deinit();
+    const tree_allocator = tree_arena.allocator();
+
     while (true) {
         reader.streamUntilDelimiter(read_buffer.writer(), '<', null) catch |err| switch (err) {
             error.EndOfStream => break,
@@ -553,8 +557,8 @@ pub fn parseRegistry(
                     .registry => switch (elemtag) {
                         .enums => try extractEnumGroup(&registry, tag),
                         .feature => {
-                            var tree = try xml.parseXml(allocator, reader, tag.*);
-                            defer tree.deinit();
+                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
+                            defer _ = tree_arena.reset(.free_all);
                             defer _ = element_stack.pop();
 
                             try extractFeature(&registry, &tree);
@@ -568,8 +572,8 @@ pub fn parseRegistry(
                     },
                     .commands => switch (elemtag) {
                         .command => {
-                            var tree = try xml.parseXml(allocator, reader, tag.*);
-                            defer tree.deinit();
+                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
+                            defer _ = tree_arena.reset(.free_all);
                             defer _ = element_stack.pop();
 
                             try extractCommand(&registry, &tree);
@@ -581,8 +585,8 @@ pub fn parseRegistry(
                             if (tag.self_close) {
                                 continue;
                             }
-                            var tree = try xml.parseXml(allocator, reader, tag.*);
-                            defer tree.deinit();
+                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
+                            defer _ = tree_arena.reset(.free_all);
                             defer _ = element_stack.pop();
 
                             try extractExtension(&registry, &tree);
