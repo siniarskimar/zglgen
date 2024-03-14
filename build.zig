@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const build_examples = b.option(bool, "build-examples", "Whenever to build examples") orelse true;
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -29,7 +30,9 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    buildExamples(b, target, optimize, exe);
+    if (build_examples) {
+        buildExamples(b, target, optimize, exe);
+    }
 
     const test_step = b.step("test", "Run unit tests");
     const unit_test = b.addTest(.{
