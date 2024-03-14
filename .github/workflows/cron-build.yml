@@ -1,4 +1,4 @@
-name: Zig CI
+name: Zig cron build
 on:
   schedule:
     - cron: '0 10 * * */2'
