@@ -63,7 +63,7 @@ pub fn main() !void {
     glfw.glfwWindowHint(glfw.GLFW_OPENGL_PROFILE, glfw.GLFW_OPENGL_CORE_PROFILE);
     glfw.glfwWindowHint(glfw.GLFW_OPENGL_DEBUG_CONTEXT, glfw.GLFW_TRUE);
 
-    const window = glfw.glfwCreateWindow(800, 600, "Hello", null, null) orelse {
+    const window = glfw.glfwCreateWindow(400, 300, "Hello", null, null) orelse {
         return error.WindowCreationFailed;
     };
     defer glfw.glfwDestroyWindow(window);
@@ -83,12 +83,12 @@ pub fn main() !void {
         gl.debugMessageControl(gl.GL_DONT_CARE, gl.GL_DONT_CARE, gl.GL_DONT_CARE, 0, null, gl.GL_TRUE);
     } else |_| {}
 
-    var program: gl.GLuint = gl.createProgram();
+    const program: gl.GLuint = gl.createProgram();
     {
-        var vs: gl.GLuint = gl.createShader(gl.GL_VERTEX_SHADER);
+        const vs: gl.GLuint = gl.createShader(gl.GL_VERTEX_SHADER);
         defer gl.deleteShader(vs);
 
-        var fs: gl.GLuint = gl.createShader(gl.GL_FRAGMENT_SHADER);
+        const fs: gl.GLuint = gl.createShader(gl.GL_FRAGMENT_SHADER);
         defer gl.deleteShader(fs);
 
         gl.shaderSource(
@@ -112,7 +112,7 @@ pub fn main() !void {
             var infolog_len: gl.GLint = 0;
             gl.getShaderiv(vs, gl.GL_INFO_LOG_LENGTH, @ptrCast(&infolog_len));
 
-            var buffer = try allocator.alloc(u8, @intCast(infolog_len));
+            const buffer = try allocator.alloc(u8, @intCast(infolog_len));
             defer allocator.free(buffer);
 
             gl.getShaderInfoLog(vs, infolog_len, null, buffer.ptr);
@@ -125,7 +125,7 @@ pub fn main() !void {
             var infolog_len: gl.GLint = 0;
             gl.getShaderiv(fs, gl.GL_INFO_LOG_LENGTH, @ptrCast(&infolog_len));
 
-            var buffer = try allocator.alloc(u8, @intCast(infolog_len));
+            const buffer = try allocator.alloc(u8, @intCast(infolog_len));
             defer allocator.free(buffer);
 
             gl.getShaderInfoLog(fs, infolog_len, null, buffer.ptr);
@@ -145,7 +145,7 @@ pub fn main() !void {
             var infolog_len: gl.GLint = 0;
             gl.getProgramiv(program, gl.GL_INFO_LOG_LENGTH, @ptrCast(&infolog_len));
 
-            var buffer = try allocator.alloc(u8, @intCast(infolog_len));
+            const buffer = try allocator.alloc(u8, @intCast(infolog_len));
             defer allocator.free(buffer);
 
             gl.getProgramInfoLog(program, infolog_len, null, buffer.ptr);
