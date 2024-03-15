@@ -2,10 +2,14 @@ name: Zig CI
 on:
   push:
     paths:
-      - '**/*.zig'
+      - 'src/**/*.zig'
+      - 'build.zig'
+      - 'build.zig.zon'
   pull_request:
     paths:
-      - '**/*.zig'
+      - 'src/**/*.zig'
+      - 'build.zig'
+      - 'build.zig.zon'
   workflow_dispatch:
 
 concurrency:
@@ -18,16 +22,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-      - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
-      - run: zig build
+      - run: zig build -Dbuild-examples=false
+      # check for runtime errors and panics
+      - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: ./zig-out/bin/zglgen --api gles1:1.0 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: ./zig-out/bin/zglgen --api gles2:3.0 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: ./zig-out/bin/zglgen --api glsc1:2.0 --output ./zig-out/gen.zig GL_KHR_debug
   compile-release:
-    needs: compile # don't compile if debug already failed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-      - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
-      - run: zig build -Doptimize=ReleaseSafe
+      - run: zig build -Dbuild-examples=false -Doptimize=ReleaseSafe
   test:
     runs-on: ubuntu-latest
     steps:
@@ -39,13 +45,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-      - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
       - run: zig fmt --check src/*.zig
-  test-generation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: goto-bus-stop/setup-zig@v2
-      - run: sudo apt-get update && sudo apt-get install -y libglfw3-dev
-      - run: zig build -Doptimize=ReleaseSafe
-      - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug

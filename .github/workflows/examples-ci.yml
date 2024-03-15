@@ -1,0 +1,32 @@
+name: Examples CI
+on:
+  push:
+    paths:
+      - 'examples/**/*.zig'
+      - 'build.zig'
+      - 'build.zig.zon'
+  pull_request:
+    paths:
+      - 'examples/**/*.zig'
+      - 'build.zig'
+      - 'build.zig.zon'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goto-bus-stop/setup-zig@v2
+      - run: sudo apt get update && sudo apt install libglfw3-dev
+      - run: zig build -Dinstall-examples=true
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goto-bus-stop/setup-zig@v2
+      - run: zig fmt --check examples/*.zig
