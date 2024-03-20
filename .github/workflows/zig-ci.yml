@@ -27,7 +27,7 @@ jobs:
       - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
       - run: ./zig-out/bin/zglgen --api gles1:1.0 --output ./zig-out/gen.zig GL_KHR_debug
       - run: ./zig-out/bin/zglgen --api gles2:3.0 --output ./zig-out/gen.zig GL_KHR_debug
-      - run: ./zig-out/bin/zglgen --api glsc1:2.0 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: ./zig-out/bin/zglgen --api glsc2:2.0 --output ./zig-out/gen.zig GL_KHR_debug
   compile-release:
     runs-on: ubuntu-latest
     steps:
