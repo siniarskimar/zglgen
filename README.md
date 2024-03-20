@@ -1,5 +1,7 @@
 # zglgen
 
+[![Zig cron build](https://github.com/siniarskimar/zglgen/actions/workflows/cron-build.yml/badge.svg)](https://github.com/siniarskimar/zglgen/actions/workflows/cron-build.yml)
+
 OpenGL bindings generator fully written in Zig.
 
 Supports generating bindings for all versions of:
