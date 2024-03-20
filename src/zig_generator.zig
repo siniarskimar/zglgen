@@ -131,7 +131,7 @@ fn writeProcedureTable(
     // _ = registry;
 }
 
-const MODULE_TYPE_PREAMPLE =
+const MODULE_TYPE_PREAMBLE =
     \\const std = @import("std");
     \\const builtin = std.builtin;
     \\
@@ -457,7 +457,7 @@ pub fn generateModule(
     std.log.info("Generating {} enums, {} commands", .{ requirements.enums.items.len, requirements.commands.items.len });
 
     // Write type declarations
-    try writer.writeAll(MODULE_TYPE_PREAMPLE);
+    try writer.writeAll(MODULE_TYPE_PREAMBLE);
 
     {
         var kit = requirements.enumgroups.keyIterator();
