@@ -300,6 +300,14 @@ fn getRequirementSet(
     return requirement_set;
 }
 
+pub fn writeFunctionParameterType(param: Registry.Command.Param, writer: anytype) !void {
+    if (param.group != null and std.mem.eql(u8, std.mem.trim(u8, param.type, " "), "GLenum")) {
+        try writer.writeAll(param.group.?);
+    } else {
+        try writer.print("{s}", .{param.type});
+    }
+}
+
 pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
     const command_name = if (std.mem.startsWith(u8, command.name, "gl"))
         command.name[2..]
@@ -312,25 +320,12 @@ pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
     );
 
     const param_len = command.params.items.len;
-    if (param_len > 0) {
-        for (command.params.items[0 .. param_len - 1], 0..) |param, idx| {
-            try writeFunctionParameterName(param, idx, writer);
-            try writer.writeByte(':');
-            if (param.group) |param_group| {
-                try writer.writeAll(param_group);
-            } else {
-                try writer.print("{s}", .{param.type});
-            }
-            try writer.writeByte(',');
-        }
-
-        const last_param = command.params.items[param_len - 1];
-        try writeFunctionParameterName(last_param, param_len - 1, writer);
+    for (command.params.items, 0..) |param, idx| {
+        try writeFunctionParameterName(param, idx, writer);
         try writer.writeByte(':');
-        if (last_param.group) |param_group| {
-            try writer.writeAll(param_group);
-        } else {
-            try writer.print("{s}", .{last_param.type});
+        try writeFunctionParameterType(param, writer);
+        if (idx != param_len - 1) {
+            try writer.writeByte(',');
         }
     }
 
@@ -341,15 +336,13 @@ pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
         .{ command.return_type, command.name },
     );
 
-    if (param_len > 0) {
-        for (command.params.items[0 .. param_len - 1], 0..) |param, idx| {
-            try writeFunctionParameterName(param, idx, writer);
+    for (command.params.items, 0..) |param, idx| {
+        try writeFunctionParameterName(param, idx, writer);
+        if (idx != param_len - 1) {
             try writer.writeByte(',');
         }
-
-        const last_param = command.params.items[param_len - 1];
-        try writeFunctionParameterName(last_param, param_len - 1, writer);
     }
+
     try writer.writeAll("});\n}\n");
 }
 
