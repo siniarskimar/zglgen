@@ -48,6 +48,9 @@ pub const Registry = struct {
         value: usize,
         signed: bool = false,
         groups: std.ArrayListUnmanaged([]const u8) = .{},
+        type_override: ?TypeOverride = null,
+
+        const TypeOverride = enum { uint, uint64 };
     };
 
     pub const Command = struct {
@@ -285,6 +288,7 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
 
     const value = tag.attributes.get("value") orelse return error.EnumHasNoValue;
     const name = tag.attributes.get("name") orelse return error.EnumHasNoName;
+    const maybe_type = tag.attributes.get("type");
     const maybe_groups = tag.attributes.get("group");
 
     var en = Registry.Enum{
@@ -319,6 +323,14 @@ pub fn extractEnum(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
 
             try en.groups.append(registry.allocator, group_regkey);
         }
+    }
+    if (maybe_type) |t| {
+        en.type_override = if (std.mem.eql(u8, t, "u"))
+            .uint
+        else if (std.mem.eql(u8, t, "ull"))
+            .uint64
+        else
+            unreachable;
     }
 
     try registry.enums.put(allocator, en.name, en);

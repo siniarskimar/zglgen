@@ -413,17 +413,21 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
 
 fn writeEnum(@"enum": Registry.Enum, writer: anytype) !void {
     const e = @"enum";
+    const enum_type = if (e.type_override) |override| switch (override) {
+        .uint => "u32",
+        .uint64 => "u64",
+    } else if (e.groups.items.len == 1) e.groups.items[0] else "GLenum";
 
     try writer.print(
         "pub const {s}: {s} = 0x{X};",
         .{
             e.name,
-            if (e.groups.items.len == 1) e.groups.items[0] else "GLenum",
+            enum_type,
             e.value,
         },
     );
     // Add a comment to make it at least searchable.
-    if (e.groups.items.len > 1) {
+    if (e.groups.items.len > 1 or e.type_override != null) {
         try writer.writeAll("// groups:");
         for (e.groups.items) |egroup_name| {
             try writer.writeByte(' ');
@@ -547,5 +551,7 @@ pub fn generateModule(
         \\    const ext_str = getString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
         \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name) != null;
         \\}
+        \\
+        \\test {@setEvalBranchQuota(1_000_000);_ = std.testing.refAllDecls(@This());}
     );
 }
