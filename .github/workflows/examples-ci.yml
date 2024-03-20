@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-      - run: sudo apt get update && sudo apt install libglfw3-dev
+      - run: sudo apt-get update -y && sudo apt-get install -y libglfw3-dev
       - run: zig build -Dinstall-examples=true
   lint:
     runs-on: ubuntu-latest
