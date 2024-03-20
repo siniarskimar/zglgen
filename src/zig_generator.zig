@@ -131,23 +131,24 @@ fn writeProcedureTable(
     // _ = registry;
 }
 
+// https://www.khronos.org/opengl/wiki/OpenGL_Type
 const MODULE_TYPE_PREAMBLE =
     \\const std = @import("std");
-    \\const builtin = std.builtin;
+    \\const builtin = @import("builtin");
     \\
     \\pub const FunctionPointer: type = *align(@alignOf(fn (u32) callconv(.C) u32)) const anyopaque;
     \\
-    \\pub const GLenum = c_uint;
+    \\pub const GLenum = u32;
     \\pub const GLboolean = u8;
-    \\pub const GLbitfield = c_uint;
+    \\pub const GLbitfield = u32;
     \\pub const GLbyte = i8;
     \\pub const GLubyte = u8;
     \\pub const GLshort = i16;
     \\pub const GLushort = u16;
-    \\pub const GLint = c_int;
-    \\pub const GLuint = c_uint;
+    \\pub const GLint = i32;
+    \\pub const GLuint = u32;
     \\pub const GLclampx = i32;
-    \\pub const GLsizei = c_int;
+    \\pub const GLsizei = i32;
     \\pub const GLfloat = f32;
     \\pub const GLclampf = f32;
     \\pub const GLdouble = f64;
