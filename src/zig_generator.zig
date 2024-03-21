@@ -287,6 +287,7 @@ fn getRequirementSet(
                 const req = req_ref.requirement;
                 const getorput_res = try requirement_set.getOrPut(req.name());
                 if (getorput_res.found_existing) {
+                    getorput_res.value_ptr.ext_ref = extname;
                     continue;
                 }
                 getorput_res.value_ptr.* = .{
@@ -391,6 +392,7 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
     try writer.writeAll(
         \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
     );
+    var command_count: u32 = 0;
 
     for (requirements.commands.items) |command_info| {
         const cmd_ext = command_info.ext orelse continue;
@@ -398,10 +400,17 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
         if (!std.mem.eql(u8, cmd_ext, ext)) {
             continue;
         }
+        command_count += 1;
 
         try writer.print(
             "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
             .{command_info.command.name},
+        );
+    }
+
+    if (command_count == 0) {
+        try writer.writeAll(
+            \\_ = proc_table; _ = getProcAddress;
         );
     }
 
