@@ -1,6 +1,8 @@
 name: Examples CI
 on:
   push:
+    branches:
+      - main
     paths:
       - 'examples/**/*.zig'
       - 'build.zig'

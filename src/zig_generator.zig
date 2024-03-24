@@ -4,25 +4,6 @@ const Registry = glregistry.Registry;
 const FeatureKey = glregistry.FeatureKey;
 const ExtensionKey = glregistry.ExtensionKey;
 
-/// Returns a number of bit shifts it takes for either `a` or `b` be equal to eachother.
-/// Expects that `a` and `b` are single bit bitmasks.
-fn shiftDistance(a: usize, b: usize) u6 {
-    if (a == b) {
-        return 0;
-    }
-
-    const lower = if (a < b) a else b;
-
-    for (1..@bitSizeOf(usize)) |shift| {
-        const shift_u6 = @as(u6, @intCast(shift));
-
-        if (@shrExact(a, shift_u6) == lower) {
-            return shift_u6;
-        }
-    }
-    unreachable;
-}
-
 const ModuleRequirements = struct {
     allocator: std.mem.Allocator,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
@@ -42,7 +23,15 @@ const ModuleRequirements = struct {
     }
 };
 
-fn resolveRequirements(
+const RequirementInfo = struct {
+    req: Registry.Requirement,
+    feature_ref: ?FeatureKey = null,
+    ext_ref: ?ExtensionKey = null,
+};
+
+const RequirementSet = std.StringHashMap(RequirementInfo);
+
+fn resolveRequirementSet(
     allocator: std.mem.Allocator,
     registry: *Registry,
     requirement_set: RequirementSet,
@@ -87,6 +76,68 @@ fn resolveRequirements(
     };
 
     return result;
+}
+
+/// Obtains requirements needed to generate
+/// a module up to a given feature and given extensions.
+/// The returned value is owned by the caller.
+fn getModuleRequirements(
+    allocator: std.mem.Allocator,
+    registry: *Registry,
+    feature_ref: FeatureKey,
+    extensions: []const []const u8,
+) !ModuleRequirements {
+    var requirement_set = RequirementSet.init(allocator);
+    defer requirement_set.deinit();
+
+    const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
+
+    const feature_range = registry.getFeatureRange(api_ref) orelse return error.FeatureNotFound;
+    for (feature_range) |feature| {
+        if (feature.number.order(feature_ref.number) == .gt) {
+            break;
+        }
+        for (feature.require_set.items) |req| {
+            const getorput_res = try requirement_set.getOrPut(req.name());
+            if (getorput_res.found_existing) {
+                continue;
+            }
+            getorput_res.value_ptr.* = .{
+                .req = req,
+                .feature_ref = .{ .api = feature.api, .number = feature.number },
+            };
+        }
+        if (feature_ref.api == .glcore and feature.api == .gl) for (feature.remove_set.items) |req| {
+            _ = requirement_set.remove(req.name());
+        };
+    }
+    for (extensions) |extname| {
+        if (registry.extensions.get(extname)) |extension| {
+
+            // skip if unsupported
+            if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
+                continue;
+            }
+            for (extension.require_set.items) |req_ref| {
+                if (req_ref.api != null and req_ref.api != feature_ref.api) {
+                    continue;
+                }
+                const req = req_ref.requirement;
+                const getorput_res = try requirement_set.getOrPut(req.name());
+                if (getorput_res.found_existing) {
+                    getorput_res.value_ptr.ext_ref = extname;
+                    continue;
+                }
+                getorput_res.value_ptr.* = .{
+                    .req = req,
+                    .ext_ref = extname,
+                };
+            }
+        } else {
+            std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
+        }
+    }
+    return resolveRequirementSet(allocator, registry, requirement_set);
 }
 
 fn writeProcedureTable(
@@ -232,75 +283,6 @@ pub fn writeFunctionParameterName(param: Registry.Command.Param, index: ?usize, 
     }
 }
 
-const RequirementInfo = struct {
-    req: Registry.Requirement,
-    feature_ref: ?FeatureKey = null,
-    ext_ref: ?ExtensionKey = null,
-};
-
-const RequirementSet = std.StringHashMap(RequirementInfo);
-
-/// Obtains a set of requirements needed to generate
-/// a module up to a given feature.
-/// The returned value is owned by the caller.
-fn getRequirementSet(
-    allocator: std.mem.Allocator,
-    registry: *Registry,
-    feature_ref: FeatureKey,
-    extensions: []const []const u8,
-) !RequirementSet {
-    var requirement_set = RequirementSet.init(allocator);
-    errdefer requirement_set.deinit();
-
-    const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
-
-    const feature_range = registry.getFeatureRange(api_ref) orelse return error.FeatureNotFound;
-    for (feature_range) |feature| {
-        if (feature.number.order(feature_ref.number) == .gt) {
-            break;
-        }
-        for (feature.require_set.items) |req| {
-            const getorput_res = try requirement_set.getOrPut(req.name());
-            if (getorput_res.found_existing) {
-                continue;
-            }
-            getorput_res.value_ptr.* = .{
-                .req = req,
-                .feature_ref = .{ .api = feature.api, .number = feature.number },
-            };
-        }
-        if (feature_ref.api == .glcore and feature.api == .gl) for (feature.remove_set.items) |req| {
-            _ = requirement_set.remove(req.name());
-        };
-    }
-    for (extensions) |extname| {
-        if (registry.extensions.get(extname)) |extension| {
-
-            // skip if unsupported
-            if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
-                continue;
-            }
-            for (extension.require_set.items) |req_ref| {
-                if (req_ref.api != null and req_ref.api != feature_ref.api) {
-                    continue;
-                }
-                const req = req_ref.requirement;
-                const getorput_res = try requirement_set.getOrPut(req.name());
-                if (getorput_res.found_existing) {
-                    continue;
-                }
-                getorput_res.value_ptr.* = .{
-                    .req = req,
-                    .ext_ref = extname,
-                };
-            }
-        } else {
-            std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
-        }
-    }
-    return requirement_set;
-}
-
 pub fn writeFunctionParameterType(param: Registry.Command.Param, writer: anytype) !void {
     if (param.group != null and std.mem.eql(u8, std.mem.trim(u8, param.type, " "), "GLenum")) {
         try writer.writeAll(param.group.?);
@@ -361,6 +343,8 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
     );
 
+    var command_count: u32 = 0;
+
     for (requirements.commands.items) |command_info| {
         const cmd_feature = command_info.feature orelse continue;
         const feature_order = cmd_feature.number.order(feature.number);
@@ -368,9 +352,17 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         if (cmd_feature.api != feature.api or feature_order != .eq) {
             continue;
         }
+        command_count += 1;
+
         try writer.print(
             "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
             .{command_info.command.name},
+        );
+    }
+
+    if (command_count == 0) {
+        try writer.writeAll(
+            \\_ = proc_table; _ = getProcAddress;
         );
     }
 
@@ -379,6 +371,7 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         \\
     );
 }
+
 pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequirements, writer: anytype) !void {
     try writer.writeAll(
         \\pub fn load
@@ -391,6 +384,7 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
     try writer.writeAll(
         \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
     );
+    var command_count: u32 = 0;
 
     for (requirements.commands.items) |command_info| {
         const cmd_ext = command_info.ext orelse continue;
@@ -398,10 +392,17 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
         if (!std.mem.eql(u8, cmd_ext, ext)) {
             continue;
         }
+        command_count += 1;
 
         try writer.print(
             "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
             .{command_info.command.name},
+        );
+    }
+
+    if (command_count == 0) {
+        try writer.writeAll(
+            \\_ = proc_table; _ = getProcAddress;
         );
     }
 
@@ -446,10 +447,7 @@ pub fn generateModule(
     extensions: []const []const u8,
     writer: anytype,
 ) !void {
-    var requirement_set = try getRequirementSet(allocator, registry, feature_ref, extensions);
-    defer requirement_set.deinit();
-
-    var requirements = try resolveRequirements(allocator, registry, requirement_set);
+    var requirements = try getModuleRequirements(allocator, registry, feature_ref, extensions);
     defer requirements.deinit();
 
     std.log.info("Generating {} enums, {} commands", .{ requirements.enums.items.len, requirements.commands.items.len });
@@ -479,7 +477,8 @@ pub fn generateModule(
         \\
     );
 
-    const feature_range = registry.getFeatureRange(feature_ref.api) orelse return error.FeatureNotFound;
+    const feature_ref_api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
+    const feature_range = registry.getFeatureRange(feature_ref_api) orelse return error.FeatureNotFound;
     for (feature_range) |feature| {
         if (feature.number.order(feature_ref.number) == .gt) {
             continue;
@@ -491,7 +490,7 @@ pub fn generateModule(
         \\pub fn load
     );
 
-    for (@tagName(feature_ref.api)) |c| {
+    for (@tagName(feature_ref_api)) |c| {
         try writer.writeByte(std.ascii.toUpper(c));
     }
 
@@ -553,5 +552,6 @@ pub fn generateModule(
         \\}
         \\
         \\test {@setEvalBranchQuota(1_000_000);_ = std.testing.refAllDecls(@This());}
+        \\
     );
 }

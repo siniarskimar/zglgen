@@ -33,7 +33,6 @@ const clap_parsers = struct {
     const ApiSpec = struct {
         api: glregistry.Registry.Feature.Api,
         version: std.SemanticVersion,
-        core: bool = false,
     };
 
     pub const ApiSpecError = error{
@@ -114,7 +113,7 @@ fn findProgramInPath(allocator: std.mem.Allocator, program_name: []const u8) !?[
     var buffer = std.ArrayList(u8).init(allocator);
     defer buffer.deinit();
 
-    var fba_buffer = [_]u8{0} ** 512;
+    var fba_buffer = [_]u8{0} ** std.fs.MAX_PATH_BYTES;
     var fba = std.heap.FixedBufferAllocator.init(&fba_buffer);
 
     const env_path = envmap.get("PATH") orelse return error.EnvPathNotSet;
@@ -148,68 +147,32 @@ fn findProgramInPath(allocator: std.mem.Allocator, program_name: []const u8) !?[
     return try buffer.toOwnedSlice();
 }
 
-fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: bool) !std.io.StreamSource {
+fn fetchGlRegistry(allocator: std.mem.Allocator) !std.ArrayList(u8) {
     const MAX_SIZE = 5 * 1024 * 1024; // 5 MiB
 
-    if (filepath) |fp| {
-        std.log.info("Using '{s}' as registry", .{fp});
-        const file = try std.fs.cwd().openFile(fp, .{});
-
-        return .{ .file = file };
-    }
-    const cache_dir_path = try getCacheDirPath(allocator);
-    defer allocator.free(cache_dir_path);
-
-    var cache_dir: ?std.fs.Dir = std.fs.openDirAbsolute(cache_dir_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => try std.fs.cwd().makeOpenPath(cache_dir_path, .{}),
-        else => blk: {
-            if (!no_cache) {
-                std.log.warn("Failed to open cache directory {s}, cache disabled {s}", .{ cache_dir_path, @errorName(err) });
-            }
-            break :blk null;
-        },
-    };
-    defer if (cache_dir) |*dir| dir.close();
-
-    blk: {
-        if (!no_cache) if (cache_dir) |dir| {
-            const cached_file = dir.openFile("gl.xml", .{}) catch |err| switch (err) {
-                error.FileNotFound => break :blk,
-                else => return err,
-            };
-            errdefer cached_file.close();
-            const stat = try cached_file.stat();
-
-            const up_to_date = stat.mtime + std.time.ns_per_day > std.time.nanoTimestamp();
-            if (up_to_date) {
-                std.log.info("Using cached GL registry", .{});
-                return .{ .file = cached_file };
-            }
-            cached_file.close();
-        };
-    }
-
-    var http = std.http.Client{ .allocator = allocator };
-    defer http.deinit();
-
-    // In 0.12.0 the following code is replaced by std.http.Client.fetch
-
-    const uri = comptime try std.Uri.parse("https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml");
+    const url = "https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml";
     var response_buffer = std.ArrayList(u8).init(allocator);
-    defer response_buffer.deinit();
+    errdefer response_buffer.deinit();
 
     var stderr = std.ArrayList(u8).init(allocator);
     defer stderr.deinit();
 
-    std.log.info("Fetching {s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path });
+    std.log.info("Fetching {s}", .{url});
 
     const curl_path = try findProgramInPath(allocator, "curl");
     defer if (curl_path) |p| allocator.free(p);
+    const wget_path = try findProgramInPath(allocator, "wget");
+    defer if (wget_path) |p| allocator.free(p);
+
+    if (curl_path == null and wget_path == null) {
+        std.log.err("Cannot download GL registry, no 'curl' or 'wget' found in $PATH", .{});
+        return error.PathSearchFail;
+    }
 
     if (curl_path) |prog_path| {
         var process = std.process.Child.init(&[_][]const u8{
             prog_path,
-            std.fmt.comptimePrint("{s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path }),
+            url,
         }, allocator);
         process.stdout_behavior = .Pipe;
         process.stderr_behavior = .Pipe;
@@ -222,16 +185,10 @@ fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: 
             std.log.err("curl exited abnormaly: \n{s}", .{stderr.items});
             return error.FetchFail;
         }
-    } else {
-        const wget_path = try findProgramInPath(allocator, "wget") orelse {
-            std.log.err("Cannot download GL registry, no 'curl' or 'wget' found in $PATH", .{});
-            return error.PathSearchFail;
-        };
-        defer allocator.free(wget_path);
-
+    } else if (wget_path) |prog_path| {
         var process = std.process.Child.init(&[_][]const u8{
-            wget_path,
-            std.fmt.comptimePrint("{s}://{s}{s}", .{ uri.scheme, uri.host.?, uri.path }),
+            prog_path,
+            url,
             "-O",
             "-",
         }, allocator);
@@ -247,6 +204,56 @@ fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: 
             return error.FetchFail;
         }
     }
+    return response_buffer;
+}
+
+fn getGlRegistry(allocator: std.mem.Allocator, filepath: ?[]const u8, no_cache: bool) !std.io.StreamSource {
+    if (filepath) |fp| {
+        std.log.info("Using '{s}' as registry", .{fp});
+        const file = try std.fs.cwd().openFile(fp, .{});
+
+        return .{ .file = file };
+    }
+
+    var cache_dir: ?std.fs.Dir = blk: {
+        const cache_dir_path = getCacheDirPath(allocator) catch |err| switch (err) {
+            error.CacheDirNotFound => break :blk null,
+            else => return err,
+        };
+        defer allocator.free(cache_dir_path);
+
+        break :blk std.fs.openDirAbsolute(cache_dir_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => try std.fs.cwd().makeOpenPath(cache_dir_path, .{}),
+            else => inner: {
+                if (!no_cache) {
+                    std.log.warn("Failed to open cache directory {s}, cache disabled {s}", .{ cache_dir_path, @errorName(err) });
+                }
+                break :inner null;
+            },
+        };
+    };
+    defer if (cache_dir) |*dir| dir.close();
+
+    blk: {
+        if (!no_cache) if (cache_dir) |dir| {
+            const cached_file = dir.openFile("gl.xml", .{}) catch |err| switch (err) {
+                error.FileNotFound => break :blk,
+                else => return err,
+            };
+            errdefer cached_file.close();
+            const stat = try cached_file.stat();
+
+            const up_to_date = (stat.mtime + std.time.ns_per_day) > std.time.nanoTimestamp();
+            if (up_to_date) {
+                std.log.info("Using cached GL registry", .{});
+                return .{ .file = cached_file };
+            }
+            cached_file.close();
+        };
+    }
+
+    var response_buffer = try fetchGlRegistry(allocator);
+    defer response_buffer.deinit();
 
     if (cache_dir) |dir| {
         const file = try dir.createFile("gl.xml", .{});
@@ -299,7 +306,7 @@ pub fn main() !void {
         return printHelp(&params);
     }
 
-    const apispec = res.args.api orelse {
+    const apispec: clap_parsers.ApiSpec = res.args.api orelse {
         std.log.err("'--api' Option is required!", .{});
         return error.MissingOption;
     };
@@ -343,13 +350,19 @@ pub fn main() !void {
         );
     };
 
-    try zig_generator.generateModule(
+    zig_generator.generateModule(
         gpallocator,
         &registry,
         .{ .api = apispec.api, .number = apispec.version },
         res.positionals,
         out_module_stream.writer(),
-    );
+    ) catch |err| switch (err) {
+        error.FeatureNotFound => {
+            std.log.err("Feature '{} {}.{}' not found in the registry", .{ apispec.api, apispec.version.major, apispec.version.minor });
+            return err;
+        },
+        else => return err,
+    };
 
     if (res.args.output) |output| {
         std.log.info("Generated '{s}'", .{output});
