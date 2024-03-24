@@ -33,7 +33,6 @@ const clap_parsers = struct {
     const ApiSpec = struct {
         api: glregistry.Registry.Feature.Api,
         version: std.SemanticVersion,
-        core: bool = false,
     };
 
     pub const ApiSpecError = error{
