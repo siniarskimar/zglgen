@@ -26,6 +26,8 @@ jobs:
       # check for runtime errors and panics
       - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
       - run: zig test ./zig-out/gen.zig
+      - run: ./zig-out/bin/zglgen --api glcore:4.6 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: zig test ./zig-out/gen.zig
       - run: ./zig-out/bin/zglgen --api gles1:1.0 --output ./zig-out/gen.zig GL_KHR_debug
       - run: zig test ./zig-out/gen.zig
       - run: ./zig-out/bin/zglgen --api gles2:3.0 --output ./zig-out/gen.zig GL_KHR_debug
