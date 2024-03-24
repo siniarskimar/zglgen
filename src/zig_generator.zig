@@ -362,6 +362,8 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
     );
 
+    var command_count: u32 = 0;
+
     for (requirements.commands.items) |command_info| {
         const cmd_feature = command_info.feature orelse continue;
         const feature_order = cmd_feature.number.order(feature.number);
@@ -369,9 +371,17 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         if (cmd_feature.api != feature.api or feature_order != .eq) {
             continue;
         }
+        command_count += 1;
+
         try writer.print(
             "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
             .{command_info.command.name},
+        );
+    }
+
+    if (command_count == 0) {
+        try writer.writeAll(
+            \\_ = proc_table; _ = getProcAddress;
         );
     }
 
@@ -380,6 +390,7 @@ pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequi
         \\
     );
 }
+
 pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequirements, writer: anytype) !void {
     try writer.writeAll(
         \\pub fn load
