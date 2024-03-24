@@ -4,25 +4,6 @@ const Registry = glregistry.Registry;
 const FeatureKey = glregistry.FeatureKey;
 const ExtensionKey = glregistry.ExtensionKey;
 
-/// Returns a number of bit shifts it takes for either `a` or `b` be equal to eachother.
-/// Expects that `a` and `b` are single bit bitmasks.
-fn shiftDistance(a: usize, b: usize) u6 {
-    if (a == b) {
-        return 0;
-    }
-
-    const lower = if (a < b) a else b;
-
-    for (1..@bitSizeOf(usize)) |shift| {
-        const shift_u6 = @as(u6, @intCast(shift));
-
-        if (@shrExact(a, shift_u6) == lower) {
-            return shift_u6;
-        }
-    }
-    unreachable;
-}
-
 const ModuleRequirements = struct {
     allocator: std.mem.Allocator,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
