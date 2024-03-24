@@ -499,7 +499,8 @@ pub fn generateModule(
         \\
     );
 
-    const feature_range = registry.getFeatureRange(feature_ref.api) orelse return error.FeatureNotFound;
+    const feature_ref_api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
+    const feature_range = registry.getFeatureRange(feature_ref_api) orelse return error.FeatureNotFound;
     for (feature_range) |feature| {
         if (feature.number.order(feature_ref.number) == .gt) {
             continue;
@@ -511,7 +512,7 @@ pub fn generateModule(
         \\pub fn load
     );
 
-    for (@tagName(feature_ref.api)) |c| {
+    for (@tagName(feature_ref_api)) |c| {
         try writer.writeByte(std.ascii.toUpper(c));
     }
 
