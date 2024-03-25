@@ -3,6 +3,7 @@ const glregistry = @import("./glregistry.zig");
 const Registry = glregistry.Registry;
 const FeatureKey = glregistry.FeatureKey;
 const ExtensionKey = glregistry.ExtensionKey;
+const ExtensionSet = std.StringHashMapUnmanaged(void);
 
 const ModuleRequirements = struct {
     allocator: std.mem.Allocator,
@@ -13,12 +14,15 @@ const ModuleRequirements = struct {
     const CommandInfo = struct {
         command: Registry.Command,
         feature: ?FeatureKey = null,
-        ext: ?ExtensionKey = null,
+        exts: ExtensionSet = .{},
     };
 
     pub fn deinit(self: *@This()) void {
         self.enumgroups.deinit(self.allocator);
         self.enums.deinit(self.allocator);
+        for (self.commands.items) |*command| {
+            command.exts.deinit(self.allocator);
+        }
         self.commands.deinit(self.allocator);
     }
 };
@@ -26,7 +30,7 @@ const ModuleRequirements = struct {
 const RequirementInfo = struct {
     req: Registry.Requirement,
     feature_ref: ?FeatureKey = null,
-    ext_ref: ?ExtensionKey = null,
+    exts_ref: ExtensionSet = .{},
 };
 
 const RequirementSet = std.StringHashMap(RequirementInfo);
@@ -69,7 +73,7 @@ fn resolveRequirementSet(
             try result.commands.append(allocator, .{
                 .command = command,
                 .feature = req_ref.feature_ref,
-                .ext = req_ref.ext_ref,
+                .exts = req_ref.exts_ref.move(), // WARN: This is bugprone for the calee
             });
         },
         .type => {},
@@ -88,7 +92,13 @@ fn getModuleRequirements(
     extensions: []const []const u8,
 ) !ModuleRequirements {
     var requirement_set = RequirementSet.init(allocator);
-    defer requirement_set.deinit();
+    defer {
+        var it = requirement_set.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.exts_ref.deinit(allocator);
+        }
+        requirement_set.deinit();
+    }
 
     const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
 
@@ -102,41 +112,36 @@ fn getModuleRequirements(
             if (getorput_res.found_existing) {
                 continue;
             }
-            getorput_res.value_ptr.* = .{
-                .req = req,
-                .feature_ref = .{ .api = feature.api, .number = feature.number },
-            };
+            getorput_res.value_ptr.* = .{ .req = req, .feature_ref = feature.asKey() };
         }
         if (feature_ref.api == .glcore and feature.api == .gl) for (feature.remove_set.items) |req| {
             _ = requirement_set.remove(req.name());
         };
     }
-    for (extensions) |extname| {
-        if (registry.extensions.get(extname)) |extension| {
+    for (extensions) |extname| if (registry.extensions.get(extname)) |extension| {
 
-            // skip if unsupported
-            if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
+        // skip if unsupported
+        if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
+            continue;
+        }
+        for (extension.require_set.items) |req_ref| {
+            if (req_ref.api != null and req_ref.api != feature_ref.api) {
                 continue;
             }
-            for (extension.require_set.items) |req_ref| {
-                if (req_ref.api != null and req_ref.api != feature_ref.api) {
-                    continue;
-                }
-                const req = req_ref.requirement;
-                const getorput_res = try requirement_set.getOrPut(req.name());
-                if (getorput_res.found_existing) {
-                    getorput_res.value_ptr.ext_ref = extname;
-                    continue;
-                }
-                getorput_res.value_ptr.* = .{
-                    .req = req,
-                    .ext_ref = extname,
-                };
+            const req = req_ref.requirement;
+            const getorput_res = try requirement_set.getOrPut(req.name());
+            if (!getorput_res.found_existing) {
+                getorput_res.value_ptr.* = .{ .req = req, .exts_ref = ExtensionSet{} };
             }
-        } else {
-            std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
+            if (getorput_res.value_ptr.exts_ref.contains(extname)) {
+                continue;
+            }
+            try getorput_res.value_ptr.exts_ref.putNoClobber(allocator, extname, {});
         }
-    }
+    } else {
+        std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
+    };
+
     return resolveRequirementSet(allocator, registry, requirement_set);
 }
 
@@ -387,9 +392,7 @@ pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequi
     var command_count: u32 = 0;
 
     for (requirements.commands.items) |command_info| {
-        const cmd_ext = command_info.ext orelse continue;
-
-        if (!std.mem.eql(u8, cmd_ext, ext)) {
+        if (command_info.exts.count() == 0 or !command_info.exts.contains(ext)) {
             continue;
         }
         command_count += 1;
