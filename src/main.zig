@@ -5,6 +5,7 @@ const glregistry = @import("./glregistry.zig");
 const zig_generator = @import("./zig_generator.zig");
 
 pub const std_options = std.Options{
+    // TODO: implement custom logger function
     .log_level = .info,
 };
 
