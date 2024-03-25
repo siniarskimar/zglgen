@@ -526,11 +526,12 @@ pub fn generateModule(
     try writer.writeAll(
         \\    return table;
         \\}
+        \\
     );
 
     for (extensions) |ext| {
         _ = registry.extensions.get(ext) orelse {
-            std.log.warn("Extension {s} not found in registry! Cannot write loader function!", .{ext});
+            std.log.err("Extension {s} not found in registry! Cannot write loader function!", .{ext});
             return error.ExtensionNotFound;
         };
         try writeExtensionLoaderFunction(ext, requirements, writer);

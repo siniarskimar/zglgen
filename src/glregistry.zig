@@ -355,6 +355,37 @@ pub fn extractEnumGroup(registry: *Registry, tag: *xml.XmlTag.StartTag) !void {
     );
 }
 
+pub fn extractExtensionSelfClosing(registry: *Registry, tag: xml.XmlTag.StartTag) !void {
+    if (tag.self_close == false) {
+        std.debug.panic("Expected a self closing tag!", .{});
+    }
+
+    const allocator = registry.allocator;
+    const string_allocator = registry.string_arena.allocator();
+    const name = tag.attributes.get("name") orelse return error.ExtensionWithoutName;
+    const supported = tag.attributes.get("supported");
+
+    var ext: Registry.Extension = .{
+        .name = try string_allocator.dupe(u8, name),
+    };
+
+    if (supported) |supstring| {
+        var it = std.mem.tokenizeScalar(u8, supstring, '|');
+        while (it.next()) |s| {
+            if (std.mem.eql(u8, s, "disabled")) {
+                break;
+            }
+            const api = std.meta.stringToEnum(Registry.Feature.Api, s) orelse {
+                std.log.err("Unknown {s} API", .{s});
+                return error.UnknownApi;
+            };
+            try ext.supported_api.append(api);
+        }
+    }
+
+    try registry.extensions.putNoClobber(allocator, ext.name, ext);
+}
+
 /// Extracts information about an extension, including it's requirements
 /// and stores it in the registry.
 pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
@@ -375,7 +406,7 @@ pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
                 break;
             }
             const api = std.meta.stringToEnum(Registry.Feature.Api, s) orelse {
-                std.log.debug("{s}", .{s});
+                std.log.err("Unknown {s} API", .{s});
                 return error.UnknownApi;
             };
             try ext.supported_api.append(api);
@@ -384,7 +415,7 @@ pub fn extractExtension(registry: *Registry, tree: *xml.XmlTree) !void {
 
     var req_elem_it = tag.findElements("require");
     while (req_elem_it.next()) |require_elem| {
-        const api = if (require_elem.attributes.get("api")) |api_str|
+        const api: ?Registry.Feature.Api = if (require_elem.attributes.get("api")) |api_str|
             std.meta.stringToEnum(Registry.Feature.Api, api_str) orelse return error.UnknownApi
         else
             null;
@@ -595,6 +626,7 @@ pub fn parseRegistry(
                     .extensions => switch (elemtag) {
                         .extension => {
                             if (tag.self_close) {
+                                try extractExtensionSelfClosing(&registry, tag.*);
                                 continue;
                             }
                             var tree = try xml.parseXml(tree_allocator, reader, tag.*);
