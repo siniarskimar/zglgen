@@ -289,7 +289,7 @@ pub fn main() !void {
         \\--api <apispec>      Api to generate
         \\--registry <file>    File path to OpenGL registry (default: downloads https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml)
         \\-c, --no-cache       Disables caching of GL registry
-        \\-q, --quiet          Silence all stderr messages
+        \\-q, --quiet          Silence progression messages
         \\<extension>...       Additional extensions
     );
     const use_c_allocator = builtin.link_libc and builtin.mode != .Debug;
