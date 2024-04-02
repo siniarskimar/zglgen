@@ -10,7 +10,7 @@ pub const std_options = std.Options{
     .logFn = logFn,
 };
 
-var log_quiet: bool = false;
+var log_verbose: bool = false;
 
 pub fn logFn(
     comptime message_level: std.log.Level,
@@ -18,7 +18,7 @@ pub fn logFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    if (log_quiet and message_level != .err) {
+    if (!log_verbose and message_level != .err) {
         return;
     }
     std.log.defaultLog(message_level, scope, format, args);
@@ -286,10 +286,10 @@ pub fn main() !void {
     const params = comptime clap.parseParamsComptime(
         \\-h, --help           Show this help message
         \\-o, --output <file>  Destination path for the generated module (default: prints to stdout)
-        \\--api <apispec>      Api to generate
+        \\--api <apispec>      (required) Specify the kind of GL API to generate 
         \\--registry <file>    File path to OpenGL registry (default: downloads https://raw.githubusercontent.com/KhronosGroup/OpenGL-Registry/main/xml/gl.xml)
-        \\-c, --no-cache       Disables caching of GL registry
-        \\-q, --quiet          Silence progression messages
+        \\-c, --no-cache       Disable caching of GL registry
+        \\-v, --verbose        Print info and debug messages
         \\<extension>...       Additional extensions
     );
     const use_c_allocator = builtin.link_libc and builtin.mode != .Debug;
@@ -323,8 +323,8 @@ pub fn main() !void {
         return printHelp(&params);
     }
 
-    if (res.args.quiet != 0) {
-        log_quiet = true;
+    if (res.args.verbose != 0) {
+        log_verbose = true;
     }
 
     const apispec: clap_parsers.ApiSpec = res.args.api orelse {
