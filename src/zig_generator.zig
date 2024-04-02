@@ -545,16 +545,6 @@ pub fn generateModule(
         \\      return &(current_proc_table orelse return null);
         \\}
         \\
-        \\/// Returns `true` if extension `name` is supported
-        \\/// by current GL context
-        \\pub fn extensionSupportedGL(name: []const u8) bool {
-        // TODO: Cache GL_EXTENSIONS string
-        \\    // glGetString fails only when it's parameter names an invalid string
-        \\    // here it will never fail unless GL context is broken.
-        \\    const ext_str = getString(GL_EXTENSIONS) orelse std.debug.panic("glGetString(GL_EXTENSIONS) failed", .{});
-        \\    return std.mem.indexOf(u8, std.mem.span(ext_str), name) != null;
-        \\}
-        \\
         \\test {@setEvalBranchQuota(1_000_000);_ = std.testing.refAllDecls(@This());}
         \\
     );
