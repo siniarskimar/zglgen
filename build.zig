@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "zglgen",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     const unit_test = b.addTest(.{
-        .root_source_file = .{ .path = "src/test.zig" },
+        .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -64,7 +64,7 @@ fn buildExamples(
 
     const example_triangle = b.addExecutable(.{
         .name = "example-triangle",
-        .root_source_file = .{ .path = "examples/triangle.zig" },
+        .root_source_file = b.path("examples/triangle.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -73,7 +73,7 @@ fn buildExamples(
     example_triangle.root_module.addImport("gl", gen_module);
 
     const run_example_triangle = b.addRunArtifact(example_triangle);
-    run_example_triangle.cwd = .{ .path = b.pathFromRoot("examples/") };
+    run_example_triangle.cwd = b.path(b.pathFromRoot("examples/"));
 
     if (install_examples) {
         b.installArtifact(example_triangle);
