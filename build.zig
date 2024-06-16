@@ -73,7 +73,7 @@ fn buildExamples(
     example_triangle.root_module.addImport("gl", gen_module);
 
     const run_example_triangle = b.addRunArtifact(example_triangle);
-    run_example_triangle.cwd = b.path(b.pathFromRoot("examples/"));
+    run_example_triangle.cwd = b.path("examples/");
 
     if (install_examples) {
         b.installArtifact(example_triangle);

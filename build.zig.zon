@@ -11,8 +11,8 @@
 
     .dependencies = .{
         .clap = .{
-            .url = "https://github.com/Hejsil/zig-clap/archive/8c98e6404b22aafc0184e999d8f068b81cc22fa1.tar.gz",
-            .hash = "122014e73fd712190e109950837b97f6143f02d7e2b6986e1db70b6f4aadb5ba6a0d"
+            .url = "https://github.com/Hejsil/zig-clap/archive/7a51c11319b3892b81784149fb2cb2915073710c.tar.gz",
+            .hash = "12204b2fb733b2de9184d1907032709e79c2595b4adc9bed12a8383b114d4c0da932",
         },
     },
     .paths = .{
@@ -24,6 +24,6 @@
         "README.md",
         "src",
         "build.zig",
-        "build.zig.zon"
+        "build.zig.zon",
     },
 }
