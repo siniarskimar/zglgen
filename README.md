@@ -14,9 +14,7 @@ Supports generating bindings for all versions of:
 
 ## Usage
 
-The main branch of zglgen tries to work with latest working zig version.
-
-If you perfer working with official releases of zig, checkout `zig-<your_version>` tag.
+The main branch of zglgen tries to work with latest official release of Zig.
 
 ### Command line
 

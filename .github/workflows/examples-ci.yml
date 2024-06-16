@@ -24,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
       - run: sudo apt-get update -y && sudo apt-get install -y libglfw3-dev
       - run: zig build -Dinstall-examples=true
   lint:
@@ -31,4 +33,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
       - run: zig fmt --check examples/*.zig
