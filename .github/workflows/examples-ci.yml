@@ -27,7 +27,7 @@ jobs:
         with:
           version: 0.13.0
       - run: sudo apt-get update -y && sudo apt-get install -y libglfw3-dev
-      - run: zig build -Dinstall-examples=true
+      - run: cd examples && zig build
   lint:
     runs-on: ubuntu-latest
     steps:

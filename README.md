@@ -44,36 +44,7 @@ Up-to-date documentation on command line options can be found by running `zglgen
 ### Generating bindings
 
 You can use zglgen to generate bindings on the command line or as part of your build process.
-
-```zig
-// Get zglgen executable
-// -Doptimize=ReleaseSafe slows down compilation but significantly
-// speeds up generation with the use of C std library
-const zglgen_dep = b.dependency("zglgen", .{.optimize = .ReleaseSafe});
-const zglgen_exe = zglgen_dep.artifact("zglgen");
-
-// Use `std.Build.addRunArtifact` to generate bindings during build
-const zglgen_cmd = b.addRunArtifact(zglgen_exe);
-zglgen_cmd.addArg("-o");
-const gl_bindings_path = zglgen_cmd.addOutputFileArg("gl.zig");
-
-zglgen_cmd.addArgs(&[_][]const u8{
-// zig fmt off
-  "--api", "gl:4.6",
-  "GL_KHR_debug",
-// zig fmt on
-});
-
-// Create a module with generated bindings
-const gl_bindings = b.createModule(.{
-  .source_file = .{.path = gl_bindings_path },
-});
-
-// Add it to your executable
-your_exe.addModule("gl", gl_bindings);
-```
-
-For example on how to use a generated module see [examples/triangle.zig](./examples/triangle.zig)
+See [examples/build.zig](./examples/build.zig).
 
 **NOTE**: Consider building zglgen with `ReleaseSafe` optimization.
 In `Debug`, zglgen uses `std.GeneralPurposeAllocator` which is **really slow** but is necessary to fix bugs.
