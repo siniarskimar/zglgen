@@ -26,7 +26,7 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.13.0
-      - run: zig build -Dbuild-examples=false
+      - run: zig build
       # check for runtime errors and panics
       - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
       - run: zig test ./zig-out/gen.zig
@@ -45,7 +45,7 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.13.0
-      - run: zig build -Dbuild-examples=false -Doptimize=ReleaseSafe
+      - run: zig build -Doptimize=ReleaseSafe
   test:
     runs-on: ubuntu-latest
     steps:
