@@ -250,7 +250,7 @@ pub fn writeFunctionParameterName(param: Registry.Command.Param, index: ?usize, 
 
     // reserved keywords that OpenGL
     // uses as parameter names
-    const keywords = std.ComptimeStringMap(void, .{
+    const keywords = std.StaticStringMap(void).initComptime(.{
         &.{"type"},
         &.{"u1"},
         &.{"u2"},
