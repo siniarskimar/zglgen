@@ -35,7 +35,7 @@ const ElementTag = enum {
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
-    string_arena: std.heap.ArenaAllocator,
+    registry_content: []const u8,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.StringHashMapUnmanaged(Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
@@ -113,13 +113,6 @@ pub const Registry = struct {
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator) @This() {
-        return .{
-            .allocator = allocator,
-            .string_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
-        };
-    }
-
     pub fn deinit(self: *@This()) void {
         self.enumgroups.deinit(self.allocator);
         {
@@ -152,6 +145,14 @@ pub const Registry = struct {
         }
         self.features.deinit(self.allocator);
         self.string_arena.deinit();
+    }
+
+    pub fn parse(allocator: std.mem.Allocator, file: std.fs.File) !@This() {
+        const registry_content = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
+        var self: Registry = .{ .allocator = allocator, .registry_content = registry_content };
+        errdefer self.deinit();
+
+        return self;
     }
 
     pub fn sortFeatures(self: *@This()) void {
