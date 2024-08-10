@@ -19,14 +19,6 @@ pub const CliError = error{
     MissingRequiredOption,
 };
 
-pub const FileParseError = error{FilepathEmpty};
-pub fn filepathParser(in: []const u8) FileParseError![]const u8 {
-    if (std.mem.trim(u8, in, " ").len == 0) {
-        return FileParseError.FilepathEmpty;
-    }
-    return in;
-}
-
 pub fn printHelp(params: []const clap.Param(clap.Help)) !void {
     const stderr = std.io.getStdErr();
     const writer = stderr.writer();
@@ -45,10 +37,6 @@ pub fn reportDiagnostic(diag: clap.Diagnostic, err: anyerror) void {
         longest.name = diag.arg;
 
     switch (err) {
-        FileParseError.FilepathEmpty => log.err(
-            "Filepath of '{s}{s}' cannot be empty",
-            .{ longest.kind.prefix(), longest.name },
-        ),
         clap.streaming.Error.DoesntTakeValue => log.err(
             "The argument '{s}{s}' does not take a value",
             .{ longest.kind.prefix(), longest.name },
