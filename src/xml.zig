@@ -318,6 +318,97 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     }
 }
 
+pub fn readXmlTag(
+    reader: anytype,
+    read_buffer: *std.ArrayList(u8),
+) !void {
+    const start_byte = reader.readByte() catch |err|
+        if (err == error.EndOfStream) return error.EarlyEndOfStream else return err;
+
+    try read_buffer.append(start_byte);
+
+    switch (start_byte) {
+        '?' => while (true) {
+            reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
+                error.EndOfStream => return error.EarlyEndOfStream,
+                else => return err,
+            };
+            try read_buffer.append('>');
+            if (std.mem.endsWith(u8, read_buffer.items, "?>")) break;
+        },
+        '!' => {
+            const begin_buffer = reader.readBytesNoEof(3) catch |err|
+                if (err == error.EndOfStream) return error.EarlyEndOfStream else return err;
+
+            try read_buffer.appendSlice(&begin_buffer);
+            if (!std.mem.eql(u8, &begin_buffer, "-- ")) return error.UnsupportedDocumentTag;
+
+            while (!std.mem.endsWith(u8, read_buffer.items, " -->")) {
+                reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
+                    error.EndOfStream => return error.EarlyEndOfStream,
+                    else => return err,
+                };
+                try read_buffer.append('>');
+            }
+        },
+        else => {
+            reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
+                error.EndOfStream => return error.EarlyEndOfStream,
+                else => return err,
+            };
+            try read_buffer.append('>');
+        },
+    }
+}
+
+test readXmlTag {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var read_buffer = std.ArrayList(u8).init(allocator);
+    defer read_buffer.deinit();
+
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<hello>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "</hello>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<?xml ?>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<!-- <this should be ignored> -->";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+}
+
 test "parseXmlTag" {
     const testing = std.testing;
     const allocator = testing.allocator;
