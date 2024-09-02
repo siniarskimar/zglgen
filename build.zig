@@ -29,12 +29,16 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const test_step = b.step("test", "Run unit tests");
     const unit_test = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
     const test_run = b.addRunArtifact(unit_test);
+    const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&test_run.step);
+
+    const check_step = b.step("check", "Check if the project builds");
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&unit_test.step);
 }
