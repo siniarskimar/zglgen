@@ -144,13 +144,39 @@ pub const Registry = struct {
             feature.remove_set.deinit(self.allocator);
         }
         self.features.deinit(self.allocator);
-        self.string_arena.deinit();
+        self.allocator.free(self.registry_content);
     }
 
     pub fn parse(allocator: std.mem.Allocator, file: std.fs.File) !@This() {
         const registry_content = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
         var self: Registry = .{ .allocator = allocator, .registry_content = registry_content };
         errdefer self.deinit();
+
+        var fbstream = std.io.fixedBufferStream(registry_content);
+        const reader = fbstream.reader();
+
+        var counting_readerst = std.io.countingReader(reader);
+        const counting_reader = counting_readerst.reader();
+
+        while (true) {
+            const content_start = fbstream.pos;
+            counting_readerst.bytes_read = 0;
+            counting_reader.streamUntilDelimiter(std.io.null_writer, '<', null) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => return err,
+            };
+            const content_end = content_start + counting_readerst.bytes_read - 1;
+
+            const tag_slice_start = fbstream.pos;
+            counting_readerst.bytes_read = 0;
+            try xml.readXmlTag(counting_reader, void);
+            const tag_slice_end = tag_slice_start + counting_readerst.bytes_read - 1;
+
+            const content = registry_content[content_start..content_end];
+            const tag_slice = registry_content[tag_slice_start..tag_slice_end];
+            _ = content;
+            _ = tag_slice;
+        }
 
         return self;
     }
