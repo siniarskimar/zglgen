@@ -320,43 +320,74 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
 
 pub fn readXmlTag(
     reader: anytype,
-    read_buffer: *std.ArrayList(u8),
+    writer: anytype,
+    // read_buffer: *std.ArrayList(u8),
 ) !void {
-    const start_byte = reader.readByte() catch |err|
-        if (err == error.EndOfStream) return error.EarlyEndOfStream else return err;
+    const WriterT = if (@TypeOf(writer) == type and writer != void)
+        @compileError("Only void is allowed as type parameter")
+    else if (@TypeOf(writer) == type)
+        void
+    else
+        @TypeOf(writer);
 
-    try read_buffer.append(start_byte);
+    const start_byte = try reader.readByte();
+
+    if (WriterT != void) {
+        try writer.writeByte(start_byte);
+    }
 
     switch (start_byte) {
-        '?' => while (true) {
-            reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
-                error.EndOfStream => return error.EarlyEndOfStream,
-                else => return err,
-            };
-            try read_buffer.append('>');
-            if (std.mem.endsWith(u8, read_buffer.items, "?>")) break;
-        },
-        '!' => {
-            const begin_buffer = reader.readBytesNoEof(3) catch |err|
-                if (err == error.EndOfStream) return error.EarlyEndOfStream else return err;
+        '?' => {
+            var prev_byte: u8 = 0;
+            while (true) {
+                const current = try reader.readByte();
+                if (current == '>' and prev_byte == 0) return error.InvalidTag;
+                if (current == '>' and prev_byte == '?') {
+                    if (WriterT != void) {
+                        try writer.writeByte(current);
+                    }
+                    break;
+                }
 
-            try read_buffer.appendSlice(&begin_buffer);
-            if (!std.mem.eql(u8, &begin_buffer, "-- ")) return error.UnsupportedDocumentTag;
-
-            while (!std.mem.endsWith(u8, read_buffer.items, " -->")) {
-                reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
-                    error.EndOfStream => return error.EarlyEndOfStream,
-                    else => return err,
-                };
-                try read_buffer.append('>');
+                if (WriterT != void and prev_byte != 0) {
+                    try writer.writeByte(prev_byte);
+                }
+                prev_byte = current;
             }
         },
-        else => {
-            reader.streamUntilDelimiter(read_buffer.writer(), '>', null) catch |err| switch (err) {
-                error.EndOfStream => return error.EarlyEndOfStream,
-                else => return err,
-            };
-            try read_buffer.append('>');
+        '!' => {
+            const begin_buffer = try reader.readBytesNoEof(3);
+
+            if (WriterT != void) {
+                _ = try writer.write(begin_buffer);
+            }
+            // errdefer @breakpoint();
+            if (!std.mem.eql(u8, std.mem.trimRight(u8, &begin_buffer, " \n\t\r"), "--")) return error.UnsupportedDocumentTag;
+
+            var read_buffer = [_]u8{0} ** 4;
+            _ = try reader.readAll(&read_buffer);
+
+            while (true) {
+                if (WriterT != void and read_buffer[0] != 0) {
+                    try writer.writeByte(read_buffer[0]);
+                }
+                read_buffer[0] = read_buffer[1];
+                read_buffer[1] = read_buffer[2];
+                read_buffer[2] = read_buffer[3];
+                read_buffer[3] = try reader.readByte();
+                if (std.mem.eql(u8, std.mem.trimLeft(u8, read_buffer[0..], " \n\t\r"), "-->")) {
+                    if (WriterT != void) {
+                        try writer.write(read_buffer);
+                    }
+                    break;
+                }
+            }
+        },
+        else => if (WriterT != void) {
+            try reader.streamUntilDelimiter(writer, '>', null);
+            try writer.writeByte('>');
+        } else {
+            try reader.streamUntilDelimiter(std.io.null_writer, '>', null);
         },
     }
 }
