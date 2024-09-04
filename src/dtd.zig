@@ -58,7 +58,6 @@ pub const Registry = struct {
 pub const Enums = struct {
     bitmask: bool = false,
     group: ?[]const u8 = null,
-    values: std.ArrayListUnmanaged(Enum) = .{},
 };
 
 pub const Enum = struct {
