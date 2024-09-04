@@ -29,12 +29,13 @@ pub const Element = union(enum) {
     unused: void,
 
     // <command> related
-    proto: void,
+    proto: Command.Proto,
     param: Command.Param,
     ptype: []const u8,
     glx: void,
     vecequiv: void,
 
+    // self explanitory
     alias: void,
 
     // <feature> and <extension> related
@@ -78,6 +79,11 @@ pub const Command = struct {
         name: []const u8,
         type: []const u8,
         group: ?[]const u8 = null,
+    };
+
+    pub const Proto = struct {
+        name: []const u8 = "",
+        return_type: []const u8 = "void",
     };
 };
 
