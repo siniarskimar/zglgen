@@ -318,6 +318,128 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
     }
 }
 
+pub fn readXmlTag(
+    reader: anytype,
+    writer: anytype,
+    // read_buffer: *std.ArrayList(u8),
+) !void {
+    const WriterT = if (@TypeOf(writer) == type and writer != void)
+        @compileError("Only void is allowed as type parameter")
+    else if (@TypeOf(writer) == type)
+        void
+    else
+        @TypeOf(writer);
+
+    const start_byte = try reader.readByte();
+
+    if (WriterT != void) {
+        try writer.writeByte(start_byte);
+    }
+
+    switch (start_byte) {
+        '?' => {
+            var prev_byte: u8 = 0;
+            while (true) {
+                const current = try reader.readByte();
+                if (current == '>' and prev_byte == 0) return error.InvalidTag;
+                if (current == '>' and prev_byte == '?') {
+                    if (WriterT != void) {
+                        try writer.writeByte(current);
+                    }
+                    break;
+                }
+
+                if (WriterT != void and prev_byte != 0) {
+                    try writer.writeByte(prev_byte);
+                }
+                prev_byte = current;
+            }
+        },
+        '!' => {
+            const begin_buffer = try reader.readBytesNoEof(3);
+
+            if (WriterT != void) {
+                _ = try writer.write(begin_buffer);
+            }
+            // errdefer @breakpoint();
+            if (!std.mem.eql(u8, std.mem.trimRight(u8, &begin_buffer, " \n\t\r"), "--")) return error.UnsupportedDocumentTag;
+
+            var read_buffer = [_]u8{0} ** 4;
+            _ = try reader.readAll(&read_buffer);
+
+            while (true) {
+                if (WriterT != void and read_buffer[0] != 0) {
+                    try writer.writeByte(read_buffer[0]);
+                }
+                read_buffer[0] = read_buffer[1];
+                read_buffer[1] = read_buffer[2];
+                read_buffer[2] = read_buffer[3];
+                read_buffer[3] = try reader.readByte();
+                if (std.mem.eql(u8, std.mem.trimLeft(u8, read_buffer[0..], " \n\t\r"), "-->")) {
+                    if (WriterT != void) {
+                        try writer.write(read_buffer);
+                    }
+                    break;
+                }
+            }
+        },
+        else => if (WriterT != void) {
+            try reader.streamUntilDelimiter(writer, '>', null);
+            try writer.writeByte('>');
+        } else {
+            try reader.streamUntilDelimiter(std.io.null_writer, '>', null);
+        },
+    }
+}
+
+test readXmlTag {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+    var read_buffer = std.ArrayList(u8).init(allocator);
+    defer read_buffer.deinit();
+
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<hello>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "</hello>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<?xml ?>";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+    {
+        defer read_buffer.clearAndFree();
+
+        const test_case = "<!-- <this should be ignored> -->";
+        var fbs = std.io.fixedBufferStream(test_case);
+
+        try readXmlTag(fbs.reader(), &read_buffer);
+
+        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+    }
+}
+
 test "parseXmlTag" {
     const testing = std.testing;
     const allocator = testing.allocator;

@@ -1,132 +1,23 @@
 const std = @import("std");
 const xml = @import("./xml.zig");
-
-const ElementTag = enum {
-    registry,
-
-    comment,
-    name,
-
-    types,
-    type,
-    apientry,
-    kinds,
-    kind,
-
-    enums,
-    @"enum",
-    unused,
-
-    commands,
-    command,
-    proto,
-    param,
-    ptype,
-    glx,
-    alias,
-    vecequiv,
-
-    feature,
-    extensions,
-    extension,
-    require,
-    remove,
-};
+const dtd = @import("./dtd.zig");
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     registry_content: []const u8,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
-    enums: std.StringHashMapUnmanaged(Enum) = .{},
-    commands: std.StringHashMapUnmanaged(Command) = .{},
-    types: std.StringHashMapUnmanaged(Type) = .{},
-    extensions: std.StringHashMapUnmanaged(Extension) = .{},
-    features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Enum = struct {
-        name: []const u8,
-        value: usize,
-        signed: bool = false,
-        groups: std.ArrayListUnmanaged([]const u8) = .{},
-        type_override: ?TypeOverride = null,
-
-        const TypeOverride = enum { uint, uint64 };
-    };
-
-    pub const Command = struct {
-        name: []const u8,
-        return_type: []const u8,
-        params: std.ArrayListUnmanaged(Param) = .{},
-
-        pub const Param = struct {
-            name: []const u8,
-            type: []const u8,
-            inner_type: []const u8,
-            group: ?[]const u8,
-        };
-    };
-
-    pub const Type = struct {
-        alias: []const u8,
-        original: []const u8,
-    };
-
-    pub const Extension = struct {
-        name: []const u8,
-        supported_api: std.BoundedArray(Feature.Api, 8) = .{},
-        require_set: std.ArrayListUnmanaged(RequirementRef) = .{},
-
-        const RequirementRef = struct {
-            requirement: Requirement,
-            api: ?Registry.Feature.Api = null,
-        };
-    };
-
-    pub const Feature = struct {
-        api: Api,
-        number: std.SemanticVersion,
-        require_set: std.ArrayListUnmanaged(Requirement) = .{},
-        remove_set: std.ArrayListUnmanaged(Requirement) = .{},
-
-        pub const Api = enum(u4) {
-            gl,
-            glcore,
-            gles1,
-            gles2,
-            glsc2,
-        };
-
-        pub fn asKey(self: @This()) FeatureKey {
-            return .{ .api = self.api, .number = self.number };
-        }
-    };
-
-    pub const Requirement = union(enum) {
-        @"enum": []const u8,
-        command: []const u8,
-        type: []const u8,
-
-        pub fn name(self: @This()) []const u8 {
-            return switch (self) {
-                inline else => |n| return n,
-            };
-        }
-    };
+    enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
+    commands: std.StringHashMapUnmanaged(dtd.Command) = .{},
+    extensions: std.StringHashMapUnmanaged(dtd.Extension) = .{},
+    features: std.ArrayListUnmanaged(dtd.Feature) = .{},
 
     pub fn deinit(self: *@This()) void {
         self.enumgroups.deinit(self.allocator);
-        {
-            var it = self.enums.iterator();
-            while (it.next()) |entry| {
-                var e: *Registry.Enum = entry.value_ptr;
-                e.groups.deinit(self.allocator);
-            }
-            self.enums.deinit(self.allocator);
-        }
+        self.enums.deinit(self.allocator);
         {
             var it = self.commands.iterator();
             while (it.next()) |entry| {
-                var command: *Registry.Command = entry.value_ptr;
+                var command: *dtd.Command = entry.value_ptr;
                 command.params.deinit(self.allocator);
             }
             self.commands.deinit(self.allocator);
@@ -134,69 +25,232 @@ pub const Registry = struct {
         {
             var it = self.extensions.iterator();
             while (it.next()) |entry| {
-                var ext: *Registry.Extension = entry.value_ptr;
-                ext.require_set.deinit(self.allocator);
+                var ext: *dtd.Extension = entry.value_ptr;
+                ext.require.deinit(self.allocator);
             }
             self.extensions.deinit(self.allocator);
         }
         for (self.features.items) |*feature| {
-            feature.require_set.deinit(self.allocator);
-            feature.remove_set.deinit(self.allocator);
+            feature.require.deinit(self.allocator);
+            feature.remove.deinit(self.allocator);
         }
         self.features.deinit(self.allocator);
-        self.string_arena.deinit();
+        self.allocator.free(self.registry_content);
     }
+
+    pub const ParseError = error{
+        BadXmlVersion,
+        InvalidTag,
+        SchemaIncorrectTag,
+        SchemaRequiredAttribute,
+        SchemaSelfClose,
+        SchemaNonSelfClose,
+        BadFormat,
+        BadMajor,
+        BadMinor,
+        BadTopLevel,
+        BadTopLevelClose,
+        EndTagMismatch,
+    };
 
     pub fn parse(allocator: std.mem.Allocator, file: std.fs.File) !@This() {
         const registry_content = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
         var self: Registry = .{ .allocator = allocator, .registry_content = registry_content };
         errdefer self.deinit();
 
-        return self;
-    }
+        var fbstream = std.io.fixedBufferStream(registry_content);
+        const reader = fbstream.reader();
 
-    pub fn sortFeatures(self: *@This()) void {
-        const SortCtx = struct {
-            items: []Registry.Feature,
+        var counting_readerst = std.io.countingReader(reader);
+        const counting_reader = counting_readerst.reader();
 
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_api_value = @intFromEnum(ctx.items[a].api);
-                const b_api_value = @intFromEnum(ctx.items[b].api);
-                return a_api_value < b_api_value or
-                    (a_api_value == b_api_value and
-                    ctx.items[b].number.order(ctx.items[a].number) == .gt);
-            }
-            pub fn swap(ctx: @This(), a: usize, b: usize) void {
-                return std.mem.swap(Registry.Feature, &ctx.items[a], &ctx.items[b]);
-            }
-        };
-        std.sort.heapContext(0, self.features.items.len, SortCtx{ .items = self.features.items });
-    }
+        var element_stack = std.ArrayList(dtd.Element).init(allocator);
+        defer element_stack.deinit();
 
-    pub fn getFeatureRange(self: *@This(), api: Registry.Feature.Api) ?[]Registry.Feature {
-        self.sortFeatures();
-        const feature_start = for (self.features.items, 0..) |feat, idx| {
-            if (feat.api == api) {
-                break idx;
-            }
-        } else return null;
+        while (true) {
+            const content_start = fbstream.pos;
+            counting_readerst.bytes_read = 0;
+            counting_reader.streamUntilDelimiter(std.io.null_writer, '<', null) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => return err,
+            };
+            const content_end = content_start + counting_readerst.bytes_read - 1;
 
-        const feature_end = for (self.features.items[feature_start..], feature_start..) |feat, idx| {
-            if (feat.api != api) {
-                break idx;
-            }
-        } else self.features.items.len;
+            const tag_slice_start = fbstream.pos;
+            counting_readerst.bytes_read = 0;
+            try xml.readXmlTag(counting_reader, void);
+            const tag_slice_end = tag_slice_start + counting_readerst.bytes_read - 1;
 
-        // inclusive start exclusive end, [start; end)
-        return self.features.items[feature_start..feature_end];
-    }
-    pub fn getFeature(self: @This(), feature: FeatureKey) ?Feature {
-        for (self.features.items) |feat| {
-            if (feat.api == feature.api and feat.number.order(feature) == .eq) {
-                return feat;
+            const content = registry_content[content_start..content_end];
+            const tag_slice = registry_content[tag_slice_start..tag_slice_end];
+            _ = content;
+
+            var xmltag = try xml.parseXmlTag(allocator, tag_slice);
+            switch (xmltag) {
+                .xml_decl => |xml_decl| {
+                    if (xml_decl.version.major != 1 and xml_decl.version.major != 0) {
+                        std.log.err("Unsupported XML version {}.{}", .{
+                            xml_decl.version.major,
+                            xml_decl.version.minor,
+                        });
+                        return ParseError.BadXmlVersion;
+                    }
+                },
+                .start_tag => |*tag| {
+                    defer tag.deinit(allocator);
+
+                    const tag_name: dtd.Element.Tag = std.meta.stringToEnum(dtd.Element.Tag, tag.name) orelse
+                        return ParseError.InvalidTag;
+
+                    if (element_stack.items.len != 0) {
+                        const top_tag: *dtd.Element = &element_stack.items[element_stack.items.len - 1];
+                        switch (top_tag.*) {
+                            .registry => |*registry| switch (tag_name) {
+                                .comment => if (!tag.self_close)
+                                    try element_stack.append(.{ .comment = "" })
+                                else {
+                                    registry.copyright = "";
+                                },
+                                .types => if (!tag.self_close) try element_stack.append(.{ .types = {} }),
+                                .kinds => if (!tag.self_close) try element_stack.append(.{ .kinds = {} }),
+                                .enums => {
+                                    const bitmask: bool = if (tag.attributes.get("type")) |type_attr|
+                                        std.mem.eql(u8, type_attr, "bitmask")
+                                    else
+                                        false;
+                                    const group = tag.attributes.get("group");
+
+                                    if (group) |name| {
+                                        try self.enumgroups.putNoClobber(allocator, name, {});
+                                    }
+
+                                    if (!tag.self_close) {
+                                        try element_stack.append(.{ .enums = .{ .bitmask = bitmask, .group = group } });
+                                    }
+                                },
+                                .commands => if (!tag.self_close) try element_stack.append(.{ .commands = {} }),
+
+                                .feature => {
+                                    const api = tag.attributes.get("api") orelse {
+                                        std.log.err("<feature> has to have 'api' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const name = tag.attributes.get("name") orelse {
+                                        std.log.err("<feature> has to have 'name' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const number = tag.attributes.get("number") orelse {
+                                        std.log.err("<feature> has to have 'number' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+
+                                    if (!tag.self_close) try element_stack.append(.{ .feature = .{
+                                        .api = api,
+                                        .name = name,
+                                        .number = dtd.FeatureNumber.parse(number) catch |err| {
+                                            switch (err) {
+                                                error.BadFormat => {
+                                                    std.log.err("<feature> 'number' attribute has to have 'major.minor' format", .{});
+                                                },
+                                                error.BadMajor => {
+                                                    std.log.err("<feature> 'number' major field has to be a positive number", .{});
+                                                },
+                                                error.BadMinor => {
+                                                    std.log.err("<feature> 'number' minor field has to be a positive number", .{});
+                                                },
+                                            }
+                                            return err;
+                                        },
+                                    } });
+                                },
+                                .extensions => if (!tag.self_close) try element_stack.append(.{ .extensions = {} }),
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .types => switch (tag_name) {
+                                // TODO: Handle <type> tags
+                                .type => if (!tag.self_close)
+                                    try element_stack.append(.{ .type = {} })
+                                else
+                                    unreachable,
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .kinds => switch (tag_name) {
+                                .kind => {},
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .enums => switch (tag_name) {
+                                .@"enum" => if (tag.self_close) {
+                                    const name = tag.attributes.get("name") orelse {
+                                        std.log.err("<enum> has to have 'name' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const value = tag.attributes.get("value") orelse {
+                                        std.log.err("<enum name='{s}'> has to have 'value' attribute", .{name});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const groups = tag.attributes.get("groups") orelse "";
+                                    try self.enums.putNoClobber(self.allocator, name, .{
+                                        .name = name,
+                                        .value = value,
+                                        .groups = groups,
+                                    });
+                                } else {
+                                    std.log.err("<enum> must be self-closing", .{});
+                                    return ParseError.SchemaSelfClose;
+                                },
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .commands => switch (tag_name) {
+                                .command => {
+                                    if (tag.self_close) {
+                                        std.log.err("<command> cannot be self-closing", .{});
+                                        return ParseError.SchemaNonSelfClose;
+                                    }
+                                    try element_stack.append(.{ .command = .{} });
+                                },
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .command => switch (tag_name) {
+                                .proto => {},
+                                .param => {},
+                                .glx => {},
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            else => std.debug.panic("not handling <{}> <{}>", .{ top_tag, tag_name }),
+                        }
+                    } else {
+                        if (tag_name != .registry) {
+                            std.log.err("got {} as top level element of registry", .{tag_name});
+                            return ParseError.BadTopLevel;
+                        }
+                        try element_stack.append(.{ .registry = .{} });
+                    }
+                },
+                .end_tag => |end_tag| {
+                    const tag_name = std.meta.stringToEnum(dtd.Element.Tag, end_tag.name) orelse
+                        return ParseError.InvalidTag;
+
+                    if (element_stack.items.len == 0) {
+                        std.log.err("got {} end-tag when no elements have been processed yet", .{tag_name});
+                        return ParseError.BadTopLevelClose;
+                    }
+                    const top = element_stack.pop();
+                    const top_tag = std.meta.activeTag(top);
+                    if (top_tag != tag_name) {
+                        std.log.err("got </{}> but </{}> expected", .{ tag_name, top_tag });
+                        return ParseError.EndTagMismatch;
+                    }
+                    _ = element_stack.pop();
+
+                    switch (tag_name) {
+                        else => unreachable,
+                    }
+                },
+                .comment => {},
             }
         }
-        return null;
+
+        return self;
     }
 };
 
@@ -514,148 +568,6 @@ pub fn extractFeature(registry: *Registry, tree: *xml.XmlTree) !void {
     }
 
     try registry.features.append(allocator, feature);
-}
-
-pub fn parseRegistry(
-    allocator: std.mem.Allocator,
-    reader: anytype,
-) !Registry {
-    var registry = Registry.init(allocator);
-    errdefer registry.deinit();
-    // errdefer {
-    //     if (@errorReturnTrace()) |trace| {
-    //         std.debug.dumpStackTrace(trace.*);
-    //     }
-    // }
-
-    const TagOrElement = union(enum) {
-        tag: ElementTag,
-        element: xml.XmlTree.Element,
-
-        fn getTag(self: @This()) ElementTag {
-            return switch (self) {
-                .tag => |t| t,
-                .element => |element| std.meta.stringToEnum(ElementTag, element.name).?,
-            };
-        }
-
-        fn deinit(self: *@This(), alloc: std.mem.Allocator) void {
-            switch (self.*) {
-                .tag => {},
-                .element => |*element| element.deinit(alloc),
-            }
-        }
-    };
-
-    var element_stack = std.ArrayList(TagOrElement).init(allocator);
-    defer element_stack.deinit();
-
-    var read_buffer = std.ArrayList(u8).init(allocator);
-    defer read_buffer.deinit();
-
-    var tree_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer tree_arena.deinit();
-    const tree_allocator = tree_arena.allocator();
-
-    while (true) {
-        reader.streamUntilDelimiter(read_buffer.writer(), '<', null) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        read_buffer.clearRetainingCapacity();
-        try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
-
-        // check if we are inside a comment
-        // and make sure we have read a full comment tag in case a comment contains a valid
-        // xml tag
-        // eg. <!-- <element attr1=""/> -->
-        if (read_buffer.items.len > 3 and std.mem.eql(u8, read_buffer.items[0..3], "!--")) {
-            while (true) {
-                const last_2chars = read_buffer.items[read_buffer.items.len - 2 .. read_buffer.items.len];
-                if (std.mem.eql(u8, last_2chars, "--")) {
-                    break;
-                }
-                try read_buffer.append('>');
-                try reader.streamUntilDelimiter(read_buffer.writer(), '>', null);
-            }
-        }
-
-        var xml_tag = try xml.parseXmlTag(allocator, read_buffer.items);
-        switch (xml_tag) {
-            .xml_decl => |*tag| {
-                if (tag.version.order(.{ .major = 1, .minor = 0, .patch = 0 }) == .gt) {
-                    std.debug.print("(xml) Unsupported XML version\n", .{});
-                    return error.UnsupportedVersion;
-                }
-            },
-            .start_tag => |*tag| {
-                defer tag.deinit(allocator);
-                const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
-                const parent = element_stack.getLastOrNull();
-
-                if (!tag.self_close) {
-                    try element_stack.append(.{ .tag = elemtag });
-                }
-
-                if (parent) |top| switch (top.getTag()) {
-                    .registry => switch (elemtag) {
-                        .enums => try extractEnumGroup(&registry, tag),
-                        .feature => {
-                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.retain_capacity);
-                            defer _ = element_stack.pop();
-
-                            try extractFeature(&registry, &tree);
-                        },
-                        else => {},
-                    },
-                    .enums => switch (elemtag) {
-                        .@"enum" => try extractEnum(&registry, tag),
-                        .unused => {},
-                        else => unreachable,
-                    },
-                    .commands => switch (elemtag) {
-                        .command => {
-                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.retain_capacity);
-                            defer _ = element_stack.pop();
-
-                            try extractCommand(&registry, &tree);
-                        },
-                        else => unreachable,
-                    },
-                    .extensions => switch (elemtag) {
-                        .extension => {
-                            if (tag.self_close) {
-                                try extractExtensionSelfClosing(&registry, tag.*);
-                                continue;
-                            }
-                            var tree = try xml.parseXml(tree_allocator, reader, tag.*);
-                            defer _ = tree_arena.reset(.retain_capacity);
-                            defer _ = element_stack.pop();
-
-                            try extractExtension(&registry, &tree);
-                        },
-                        else => unreachable,
-                    },
-                    else => {},
-                };
-            },
-            .end_tag => |*tag| {
-                const elemtag = std.meta.stringToEnum(ElementTag, tag.name) orelse return error.UnknownTag;
-
-                if (element_stack.getLastOrNull()) |element| {
-                    if (element.getTag() != elemtag) {
-                        return error.EndTagMismatch;
-                    }
-                    var top = element_stack.pop();
-                    top.deinit(allocator);
-                }
-            },
-            .comment => {},
-        }
-    }
-    return registry;
 }
 
 /// Translates a C type into a Zig type.
