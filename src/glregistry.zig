@@ -188,7 +188,12 @@ pub const Registry = struct {
                                         std.log.err("<enum name='{s}'> has to have 'value' attribute", .{name});
                                         return ParseError.SchemaRequiredAttribute;
                                     };
-                                    try self.enums.putNoClobber(self.allocator, name, .{ .name = name, .value = value });
+                                    const groups = tag.attributes.get("groups") orelse "";
+                                    try self.enums.putNoClobber(self.allocator, name, .{
+                                        .name = name,
+                                        .value = value,
+                                        .groups = groups,
+                                    });
                                 } else {
                                     std.log.err("<enum> must be self-closing", .{});
                                     return ParseError.SchemaSelfClose;
