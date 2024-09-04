@@ -9,14 +9,14 @@ pub const Element = union(enum) {
     // containers
     types: void,
     kinds: void,
-    groups: void, // not in use
+    //groups: void, // not in use
     enums: Enums,
     commands: void,
     extensions: void,
 
     type: void,
     kind: void,
-    group: void, // not in use
+    //group: void, // not in use
     command: Command,
     @"enum": Enum,
     extension: Extension,
