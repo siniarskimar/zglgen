@@ -9,38 +9,7 @@ pub const Registry = struct {
     enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
     commands: std.StringHashMapUnmanaged(dtd.Command) = .{},
     extensions: std.StringHashMapUnmanaged(dtd.Extension) = .{},
-    features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Feature = struct {
-        api: Api,
-        number: std.SemanticVersion,
-        require_set: std.ArrayListUnmanaged(Requirement) = .{},
-        remove_set: std.ArrayListUnmanaged(Requirement) = .{},
-
-        pub const Api = enum(u4) {
-            gl,
-            glcore,
-            gles1,
-            gles2,
-            glsc2,
-        };
-
-        pub fn asKey(self: @This()) FeatureKey {
-            return .{ .api = self.api, .number = self.number };
-        }
-    };
-
-    pub const Requirement = union(enum) {
-        @"enum": []const u8,
-        command: []const u8,
-        type: []const u8,
-
-        pub fn name(self: @This()) []const u8 {
-            return switch (self) {
-                inline else => |n| return n,
-            };
-        }
-    };
+    features: std.ArrayListUnmanaged(dtd.Feature) = .{},
 
     pub fn deinit(self: *@This()) void {
         self.enumgroups.deinit(self.allocator);
