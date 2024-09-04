@@ -42,8 +42,8 @@ pub const Element = union(enum) {
     remove: void,
 
     // Misc tags
-    comment: void,
-    name: void,
+    comment: []const u8,
+    name: []const u8,
 
     pub const Tag = @typeInfo(@This()).Union.tag_type.?;
 };
