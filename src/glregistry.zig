@@ -38,6 +38,21 @@ pub const Registry = struct {
         self.allocator.free(self.registry_content);
     }
 
+    pub const ParseError = error{
+        BadXmlVersion,
+        InvalidTag,
+        SchemaIncorrectTag,
+        SchemaRequiredAttribute,
+        SchemaSelfClose,
+        SchemaNonSelfClose,
+        BadFormat,
+        BadMajor,
+        BadMinor,
+        BadTopLevel,
+        BadTopLevelClose,
+        EndTagMismatch,
+    };
+
     pub fn parse(allocator: std.mem.Allocator, file: std.fs.File) !@This() {
         const registry_content = try file.readToEndAlloc(allocator, 4 * 1024 * 1024);
         var self: Registry = .{ .allocator = allocator, .registry_content = registry_content };
@@ -48,6 +63,9 @@ pub const Registry = struct {
 
         var counting_readerst = std.io.countingReader(reader);
         const counting_reader = counting_readerst.reader();
+
+        var element_stack = std.ArrayList(dtd.Element).init(allocator);
+        defer element_stack.deinit();
 
         while (true) {
             const content_start = fbstream.pos;
@@ -66,7 +84,165 @@ pub const Registry = struct {
             const content = registry_content[content_start..content_end];
             const tag_slice = registry_content[tag_slice_start..tag_slice_end];
             _ = content;
-            _ = tag_slice;
+
+            var xmltag = try xml.parseXmlTag(allocator, tag_slice);
+            switch (xmltag) {
+                .xml_decl => |xml_decl| {
+                    if (xml_decl.version.major != 1 and xml_decl.version.major != 0) {
+                        std.log.err("Unsupported XML version {}.{}", .{
+                            xml_decl.version.major,
+                            xml_decl.version.minor,
+                        });
+                        return ParseError.BadXmlVersion;
+                    }
+                },
+                .start_tag => |*tag| {
+                    defer tag.deinit(allocator);
+
+                    const tag_name: dtd.Element.Tag = std.meta.stringToEnum(dtd.Element.Tag, tag.name) orelse
+                        return ParseError.InvalidTag;
+
+                    if (element_stack.items.len != 0) {
+                        const top_tag: *dtd.Element = &element_stack.items[element_stack.items.len - 1];
+                        switch (top_tag.*) {
+                            .registry => |*registry| switch (tag_name) {
+                                .comment => if (!tag.self_close)
+                                    try element_stack.append(.{ .comment = "" })
+                                else {
+                                    registry.copyright = "";
+                                },
+                                .types => if (!tag.self_close) try element_stack.append(.{ .types = {} }),
+                                .kinds => if (!tag.self_close) try element_stack.append(.{ .kinds = {} }),
+                                .enums => {
+                                    const bitmask: bool = if (tag.attributes.get("type")) |type_attr|
+                                        std.mem.eql(u8, type_attr, "bitmask")
+                                    else
+                                        false;
+                                    const group = tag.attributes.get("group");
+
+                                    if (group) |name| {
+                                        try self.enumgroups.putNoClobber(allocator, name, {});
+                                    }
+
+                                    if (!tag.self_close) {
+                                        try element_stack.append(.{ .enums = .{ .bitmask = bitmask, .group = group } });
+                                    }
+                                },
+                                .commands => if (!tag.self_close) try element_stack.append(.{ .commands = {} }),
+
+                                .feature => {
+                                    const api = tag.attributes.get("api") orelse {
+                                        std.log.err("<feature> has to have 'api' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const name = tag.attributes.get("name") orelse {
+                                        std.log.err("<feature> has to have 'name' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const number = tag.attributes.get("number") orelse {
+                                        std.log.err("<feature> has to have 'number' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+
+                                    if (!tag.self_close) try element_stack.append(.{ .feature = .{
+                                        .api = api,
+                                        .name = name,
+                                        .number = dtd.FeatureNumber.parse(number) catch |err| {
+                                            switch (err) {
+                                                error.BadFormat => {
+                                                    std.log.err("<feature> 'number' attribute has to have 'major.minor' format", .{});
+                                                },
+                                                error.BadMajor => {
+                                                    std.log.err("<feature> 'number' major field has to be a positive number", .{});
+                                                },
+                                                error.BadMinor => {
+                                                    std.log.err("<feature> 'number' minor field has to be a positive number", .{});
+                                                },
+                                            }
+                                            return err;
+                                        },
+                                    } });
+                                },
+                                .extensions => if (!tag.self_close) try element_stack.append(.{ .extensions = {} }),
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .types => switch (tag_name) {
+                                // TODO: Handle <type> tags
+                                .type => if (!tag.self_close)
+                                    try element_stack.append(.{ .type = {} })
+                                else
+                                    unreachable,
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .kinds => switch (tag_name) {
+                                .kind => {},
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .enums => switch (tag_name) {
+                                .@"enum" => if (tag.self_close) {
+                                    const name = tag.attributes.get("name") orelse {
+                                        std.log.err("<enum> has to have 'name' attribute", .{});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    const value = tag.attributes.get("value") orelse {
+                                        std.log.err("<enum name='{s}'> has to have 'value' attribute", .{name});
+                                        return ParseError.SchemaRequiredAttribute;
+                                    };
+                                    try self.enums.putNoClobber(self.allocator, name, .{ .name = name, .value = value });
+                                } else {
+                                    std.log.err("<enum> must be self-closing", .{});
+                                    return ParseError.SchemaSelfClose;
+                                },
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .commands => switch (tag_name) {
+                                .command => {
+                                    if (tag.self_close) {
+                                        std.log.err("<command> cannot be self-closing", .{});
+                                        return ParseError.SchemaNonSelfClose;
+                                    }
+                                    try element_stack.append(.{ .command = .{} });
+                                },
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            .command => switch (tag_name) {
+                                .proto => {},
+                                .param => {},
+                                .glx => {},
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            else => std.debug.panic("not handling <{}> <{}>", .{ top_tag, tag_name }),
+                        }
+                    } else {
+                        if (tag_name != .registry) {
+                            std.log.err("got {} as top level element of registry", .{tag_name});
+                            return ParseError.BadTopLevel;
+                        }
+                        try element_stack.append(.{ .registry = .{} });
+                    }
+                },
+                .end_tag => |end_tag| {
+                    const tag_name = std.meta.stringToEnum(dtd.Element.Tag, end_tag.name) orelse
+                        return ParseError.InvalidTag;
+
+                    if (element_stack.items.len == 0) {
+                        std.log.err("got {} end-tag when no elements have been processed yet", .{tag_name});
+                        return ParseError.BadTopLevelClose;
+                    }
+                    const top = element_stack.pop();
+                    const top_tag = std.meta.activeTag(top);
+                    if (top_tag != tag_name) {
+                        std.log.err("got </{}> but </{}> expected", .{ tag_name, top_tag });
+                        return ParseError.EndTagMismatch;
+                    }
+                    _ = element_stack.pop();
+
+                    switch (tag_name) {
+                        else => unreachable,
+                    }
+                },
+                .comment => {},
+            }
         }
 
         return self;
