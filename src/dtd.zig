@@ -77,6 +77,7 @@ pub const Command = struct {
     pub const Param = struct {
         name: []const u8,
         type: []const u8,
+        group: ?[]const u8 = null,
     };
 };
 
