@@ -7,23 +7,10 @@ pub const Registry = struct {
     registry_content: []const u8,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
-    commands: std.StringHashMapUnmanaged(Command) = .{},
+    commands: std.StringHashMapUnmanaged(dtd.Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
     extensions: std.StringHashMapUnmanaged(Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Command = struct {
-        name: []const u8,
-        return_type: []const u8,
-        params: std.ArrayListUnmanaged(Param) = .{},
-
-        pub const Param = struct {
-            name: []const u8,
-            type: []const u8,
-            inner_type: []const u8,
-            group: ?[]const u8,
-        };
-    };
 
     pub const Type = struct {
         alias: []const u8,
