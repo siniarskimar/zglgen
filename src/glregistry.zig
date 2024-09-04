@@ -8,19 +8,8 @@ pub const Registry = struct {
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
     commands: std.StringHashMapUnmanaged(dtd.Command) = .{},
-    extensions: std.StringHashMapUnmanaged(Extension) = .{},
+    extensions: std.StringHashMapUnmanaged(dtd.Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Extension = struct {
-        name: []const u8,
-        supported_api: std.BoundedArray(Feature.Api, 8) = .{},
-        require_set: std.ArrayListUnmanaged(RequirementRef) = .{},
-
-        const RequirementRef = struct {
-            requirement: Requirement,
-            api: ?Registry.Feature.Api = null,
-        };
-    };
 
     pub const Feature = struct {
         api: Api,
