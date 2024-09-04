@@ -1,38 +1,6 @@
 const std = @import("std");
 const xml = @import("./xml.zig");
 
-const ElementTag = enum {
-    registry,
-
-    comment,
-    name,
-
-    types,
-    type,
-    apientry,
-    kinds,
-    kind,
-
-    enums,
-    @"enum",
-    unused,
-
-    commands,
-    command,
-    proto,
-    param,
-    ptype,
-    glx,
-    alias,
-    vecequiv,
-
-    feature,
-    extensions,
-    extension,
-    require,
-    remove,
-};
-
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     registry_content: []const u8,
