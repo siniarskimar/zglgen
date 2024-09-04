@@ -8,14 +8,8 @@ pub const Registry = struct {
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
     enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
     commands: std.StringHashMapUnmanaged(dtd.Command) = .{},
-    types: std.StringHashMapUnmanaged(Type) = .{},
     extensions: std.StringHashMapUnmanaged(Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Type = struct {
-        alias: []const u8,
-        original: []const u8,
-    };
 
     pub const Extension = struct {
         name: []const u8,
