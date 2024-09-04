@@ -98,6 +98,17 @@ pub const FeatureNumber = struct {
         if (lhs.minor < rhs.minor) return .lt;
         return .eq;
     }
+    pub fn parse(str: []const u8) !@This() {
+        var it = std.mem.splitScalar(u8, str, '.');
+        const major_str = it.next() orelse return error.BadFormat;
+        const minor_str = it.next() orelse return error.BadFormat;
+        if (it.next() != null) return error.BadFormat;
+
+        return .{
+            .major = std.fmt.parseUnsigned(u8, major_str, 10) catch return error.BadMajor,
+            .minor = std.fmt.parseUnsigned(u8, minor_str, 10) catch return error.BadMinor,
+        };
+    }
 };
 
 pub const Extension = struct {
