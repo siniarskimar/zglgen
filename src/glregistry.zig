@@ -1,25 +1,16 @@
 const std = @import("std");
 const xml = @import("./xml.zig");
+const dtd = @import("./dtd.zig");
 
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     registry_content: []const u8,
     enumgroups: std.StringHashMapUnmanaged(void) = .{},
-    enums: std.StringHashMapUnmanaged(Enum) = .{},
+    enums: std.StringHashMapUnmanaged(dtd.Enum) = .{},
     commands: std.StringHashMapUnmanaged(Command) = .{},
     types: std.StringHashMapUnmanaged(Type) = .{},
     extensions: std.StringHashMapUnmanaged(Extension) = .{},
     features: std.ArrayListUnmanaged(Feature) = .{},
-
-    pub const Enum = struct {
-        name: []const u8,
-        value: usize,
-        signed: bool = false,
-        groups: std.ArrayListUnmanaged([]const u8) = .{},
-        type_override: ?TypeOverride = null,
-
-        const TypeOverride = enum { uint, uint64 };
-    };
 
     pub const Command = struct {
         name: []const u8,
