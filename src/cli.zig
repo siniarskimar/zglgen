@@ -5,7 +5,6 @@ const glregistry = @import("./glregistry.zig");
 pub const cli_params = clap.parseParamsComptime(
     \\-h, --help           Show this help message
     \\-o, --output <file>  Destination path for the generated module (default: prints to stdout)
-    \\-c, --no-cache       Disable caching of GL registry
     \\-v, --verbose        Print info and debug messages
     \\<registry>
 );
