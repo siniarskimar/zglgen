@@ -252,50 +252,6 @@ pub const Registry = struct {
 
         return self;
     }
-
-    pub fn sortFeatures(self: *@This()) void {
-        const SortCtx = struct {
-            items: []Registry.Feature,
-
-            pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
-                const a_api_value = @intFromEnum(ctx.items[a].api);
-                const b_api_value = @intFromEnum(ctx.items[b].api);
-                return a_api_value < b_api_value or
-                    (a_api_value == b_api_value and
-                    ctx.items[b].number.order(ctx.items[a].number) == .gt);
-            }
-            pub fn swap(ctx: @This(), a: usize, b: usize) void {
-                return std.mem.swap(Registry.Feature, &ctx.items[a], &ctx.items[b]);
-            }
-        };
-        std.sort.heapContext(0, self.features.items.len, SortCtx{ .items = self.features.items });
-    }
-
-    pub fn getFeatureRange(self: *@This(), api: Registry.Feature.Api) ?[]Registry.Feature {
-        self.sortFeatures();
-        const feature_start = for (self.features.items, 0..) |feat, idx| {
-            if (feat.api == api) {
-                break idx;
-            }
-        } else return null;
-
-        const feature_end = for (self.features.items[feature_start..], feature_start..) |feat, idx| {
-            if (feat.api != api) {
-                break idx;
-            }
-        } else self.features.items.len;
-
-        // inclusive start exclusive end, [start; end)
-        return self.features.items[feature_start..feature_end];
-    }
-    pub fn getFeature(self: @This(), feature: FeatureKey) ?Feature {
-        for (self.features.items) |feat| {
-            if (feat.api == feature.api and feat.number.order(feature) == .eq) {
-                return feat;
-            }
-        }
-        return null;
-    }
 };
 
 /// Fields uniquely identifying a feature
