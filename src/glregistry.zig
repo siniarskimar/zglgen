@@ -83,7 +83,6 @@ pub const Registry = struct {
 
             const content = registry_content[content_start..content_end];
             const tag_slice = registry_content[tag_slice_start..tag_slice_end];
-            _ = content;
 
             var xmltag = try xml.parseXmlTag(allocator, tag_slice);
             switch (xmltag) {
@@ -234,16 +233,24 @@ pub const Registry = struct {
                         std.log.err("got {} end-tag when no elements have been processed yet", .{tag_name});
                         return ParseError.BadTopLevelClose;
                     }
-                    const top = element_stack.pop();
-                    const top_tag = std.meta.activeTag(top);
-                    if (top_tag != tag_name) {
-                        std.log.err("got </{}> but </{}> expected", .{ tag_name, top_tag });
+                    const element: dtd.Element = element_stack.pop();
+                    const element_tag = std.meta.activeTag(element);
+                    if (element_tag != tag_name) {
+                        std.log.err("got </{}> but </{}> expected", .{ tag_name, element_tag });
                         return ParseError.EndTagMismatch;
                     }
-                    _ = element_stack.pop();
 
-                    switch (tag_name) {
-                        else => unreachable,
+                    if (element_stack.items.len > 1) {
+                        const top = &element_stack.items[element_stack.items.len - 1];
+                        switch (element) {
+                            .comment => switch (top.*) {
+                                .registry => |*reg| reg.copyright = content,
+                                else => return ParseError.SchemaIncorrectTag,
+                            },
+                            else => return ParseError.SchemaIncorrectTag,
+                        }
+                    } else {
+                        if (element_tag != .registry) std.debug.panic("unreachable code", .{});
                     }
                 },
                 .comment => {},
