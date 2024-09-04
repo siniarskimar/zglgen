@@ -13,18 +13,11 @@ pub const Registry = struct {
 
     pub fn deinit(self: *@This()) void {
         self.enumgroups.deinit(self.allocator);
-        {
-            var it = self.enums.iterator();
-            while (it.next()) |entry| {
-                var e: *Registry.Enum = entry.value_ptr;
-                e.groups.deinit(self.allocator);
-            }
-            self.enums.deinit(self.allocator);
-        }
+        self.enums.deinit(self.allocator);
         {
             var it = self.commands.iterator();
             while (it.next()) |entry| {
-                var command: *Registry.Command = entry.value_ptr;
+                var command: *dtd.Command = entry.value_ptr;
                 command.params.deinit(self.allocator);
             }
             self.commands.deinit(self.allocator);
@@ -32,14 +25,14 @@ pub const Registry = struct {
         {
             var it = self.extensions.iterator();
             while (it.next()) |entry| {
-                var ext: *Registry.Extension = entry.value_ptr;
-                ext.require_set.deinit(self.allocator);
+                var ext: *dtd.Extension = entry.value_ptr;
+                ext.require.deinit(self.allocator);
             }
             self.extensions.deinit(self.allocator);
         }
         for (self.features.items) |*feature| {
-            feature.require_set.deinit(self.allocator);
-            feature.remove_set.deinit(self.allocator);
+            feature.require.deinit(self.allocator);
+            feature.remove.deinit(self.allocator);
         }
         self.features.deinit(self.allocator);
         self.allocator.free(self.registry_content);
