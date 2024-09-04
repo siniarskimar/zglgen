@@ -63,6 +63,7 @@ pub const Enums = struct {
 pub const Enum = struct {
     name: []const u8,
     value: []const u8,
+    groups: []const u8,
     value_type: enum { integer, unsigned, unsigned64 } = .integer,
 };
 
