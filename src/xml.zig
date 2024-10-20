@@ -359,7 +359,7 @@ pub fn readXmlTag(
             const begin_buffer = try reader.readBytesNoEof(3);
 
             if (WriterT != void) {
-                _ = try writer.write(begin_buffer);
+                try writer.writeAll(&begin_buffer);
             }
             // errdefer @breakpoint();
             if (!std.mem.eql(u8, std.mem.trimRight(u8, &begin_buffer, " \n\t\r"), "--")) return error.UnsupportedDocumentTag;
@@ -377,7 +377,7 @@ pub fn readXmlTag(
                 read_buffer[3] = try reader.readByte();
                 if (std.mem.eql(u8, std.mem.trimLeft(u8, read_buffer[0..], " \n\t\r"), "-->")) {
                     if (WriterT != void) {
-                        try writer.write(read_buffer);
+                        try writer.writeAll(&read_buffer);
                     }
                     break;
                 }
