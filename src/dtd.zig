@@ -36,7 +36,7 @@ pub const Element = union(enum) {
     vecequiv: void,
 
     // self explanitory
-    alias: void,
+    alias: []const u8,
 
     // <feature> and <extension> related
     require: void,
@@ -65,6 +65,7 @@ pub const Enum = struct {
     name: []const u8,
     value: []const u8,
     groups: []const u8,
+    api: ?[]const u8,
     value_type: enum { integer, unsigned, unsigned64 } = .integer,
 };
 

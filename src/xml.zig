@@ -249,8 +249,8 @@ pub fn parseXmlTag(allocator: std.mem.Allocator, buffer: []const u8) !XmlTag {
                 if (it.next()) |_| return error.BadXmlVersion;
 
                 const ver = std.SemanticVersion{
-                    .major = try std.fmt.parseInt(usize, major_str, 10),
-                    .minor = try std.fmt.parseInt(usize, minor_str, 10),
+                    .major = std.fmt.parseInt(usize, major_str, 10) catch return error.BadXmlDeclVersion,
+                    .minor = std.fmt.parseInt(usize, minor_str, 10) catch return error.BadXmlDeclVersion,
                     .patch = 0,
                 };
 
