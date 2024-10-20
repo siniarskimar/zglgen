@@ -344,6 +344,7 @@ pub fn readXmlTag(
                 if (current == '>' and prev_byte == 0) return error.InvalidTag;
                 if (current == '>' and prev_byte == '?') {
                     if (WriterT != void) {
+                        try writer.writeByte(prev_byte);
                         try writer.writeByte(current);
                     }
                     break;
