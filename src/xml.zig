@@ -401,42 +401,42 @@ test readXmlTag {
     {
         defer read_buffer.clearAndFree();
 
-        const test_case = "<hello>";
+        const test_case = "hello>";
         var fbs = std.io.fixedBufferStream(test_case);
 
-        try readXmlTag(fbs.reader(), &read_buffer);
+        try readXmlTag(fbs.reader(), read_buffer.writer());
 
-        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+        try testing.expectEqualSlices(u8, test_case, read_buffer.items);
     }
     {
         defer read_buffer.clearAndFree();
 
-        const test_case = "</hello>";
+        const test_case = "/hello>";
         var fbs = std.io.fixedBufferStream(test_case);
 
-        try readXmlTag(fbs.reader(), &read_buffer);
+        try readXmlTag(fbs.reader(), read_buffer.writer());
 
-        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+        try testing.expectEqualSlices(u8, test_case, read_buffer.items);
     }
     {
         defer read_buffer.clearAndFree();
 
-        const test_case = "<?xml ?>";
+        const test_case = "?xml ?>";
         var fbs = std.io.fixedBufferStream(test_case);
 
-        try readXmlTag(fbs.reader(), &read_buffer);
+        try readXmlTag(fbs.reader(), read_buffer.writer());
 
-        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+        try testing.expectEqualSlices(u8, test_case, read_buffer.items);
     }
     {
         defer read_buffer.clearAndFree();
 
-        const test_case = "<!-- <this should be ignored> -->";
+        const test_case = "!-- <this should be ignored> -->";
         var fbs = std.io.fixedBufferStream(test_case);
 
-        try readXmlTag(fbs.reader(), &read_buffer);
+        try readXmlTag(fbs.reader(), read_buffer.writer());
 
-        try testing.expectEqualSlices(u8, test_case[1..], read_buffer.items);
+        try testing.expectEqualSlices(u8, test_case, read_buffer.items);
     }
 }
 
