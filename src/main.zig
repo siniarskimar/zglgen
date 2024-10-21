@@ -72,9 +72,15 @@ pub fn main() !u8 {
         return err;
     };
     defer registry_file.close();
+    var timer = std.time.Timer.start() catch unreachable;
 
     var registry = try glregistry.Registry.parse(gpallocator, registry_file);
     defer registry.deinit();
+
+    const parse_duration = timer.read();
+    std.log.info("parsing took: {} ms", .{parse_duration / std.time.ns_per_ms});
+
+    // zig_generator.generateModule(gpallocator, &registry, , , );
 
     return 0;
 }

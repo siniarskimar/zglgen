@@ -27,11 +27,24 @@ pub const Registry = struct {
             var it = self.extensions.iterator();
             while (it.next()) |entry| {
                 var ext: *dtd.Extension = entry.value_ptr;
+                for (ext.require.items) |*require| {
+                    require.interfaces.deinit(self.allocator);
+                }
                 ext.require.deinit(self.allocator);
+                for (ext.remove.items) |*remove| {
+                    remove.interfaces.deinit(self.allocator);
+                }
+                ext.remove.deinit(self.allocator);
             }
             self.extensions.deinit(self.allocator);
         }
         for (self.features.items) |*feature| {
+            for (feature.require.items) |*require| {
+                require.interfaces.deinit(self.allocator);
+            }
+            for (feature.remove.items) |*remove| {
+                remove.interfaces.deinit(self.allocator);
+            }
             feature.require.deinit(self.allocator);
             feature.remove.deinit(self.allocator);
         }
@@ -82,6 +95,12 @@ pub const Registry = struct {
                     .command => |*command| {
                         command.params.deinit(self.allocator);
                     },
+                    .require => |*require| {
+                        require.interfaces.deinit(self.allocator);
+                    },
+                    .remove => |*remove| {
+                        remove.interfaces.deinit(self.allocator);
+                    },
                     else => {},
                 }
             }
@@ -118,23 +137,7 @@ pub const Registry = struct {
                 .start_tag => |*tag| {
                     defer tag.deinit(allocator);
 
-                    const tag_name: dtd.Element.Tag = std.meta.stringToEnum(dtd.Element.Tag, tag.name) orelse
-                        return ParseError.InvalidTag;
-
-                    if (element_stack.items.len == 0) {
-                        if (tag_name != .registry) {
-                            std.log.err("expected <registry> as top tag, got <{s}>", .{@tagName(tag_name)});
-                            return ParseError.SchemaIncorrectTag;
-                        }
-                        if (tag.self_close) {
-                            std.log.err("<registry> must be have content", .{});
-                            return ParseError.SchemaNonSelfClose;
-                        }
-                        try element_stack.append(.{ .registry = .{} });
-                        continue;
-                    }
-
-                    try handleStartTag(allocator, &self, &element_stack, tag, tag_name, content);
+                    try handleStartTag(allocator, &self, &element_stack, tag, content);
                 },
                 .comment => {},
                 .end_tag => |end_tag| try handleClosingTag(allocator, &self, &element_stack, end_tag, content),
@@ -149,10 +152,25 @@ pub const Registry = struct {
         registry: *@This(),
         element_stack: *std.ArrayList(dtd.Element),
         tag: *xml.XmlTag.StartTag,
-        tag_name: dtd.Element.Tag,
         content: []const u8,
     ) !void {
         // BUG(zig 0.13.0): Can't return explicit error
+
+        const tag_name: dtd.Element.Tag = std.meta.stringToEnum(dtd.Element.Tag, tag.name) orelse
+            return ParseError.InvalidTag;
+
+        if (element_stack.items.len == 0) {
+            if (tag_name != .registry) {
+                std.log.err("expected <registry> as top tag, got <{s}>", .{@tagName(tag_name)});
+                return ParseError.SchemaIncorrectTag;
+            }
+            if (tag.self_close) {
+                std.log.err("<registry> must be have content", .{});
+                return ParseError.SchemaNonSelfClose;
+            }
+            try element_stack.append(.{ .registry = .{} });
+            return;
+        }
 
         const top_tag: *dtd.Element = &element_stack.items[element_stack.items.len - 1];
 
@@ -329,8 +347,14 @@ pub const Registry = struct {
                 else => return error.SchemaIncorrectTag,
             },
             .feature => switch (tag_name) {
-                .require => if (!tag.self_close) try element_stack.append(.{ .require = {} }),
-                .remove => if (!tag.self_close) try element_stack.append(.{ .remove = {} }),
+                .require => if (!tag.self_close) {
+                    const profile = tag.attributes.get("profile") orelse "";
+                    try element_stack.append(.{ .require = .{ .profile = profile } });
+                },
+                .remove => if (!tag.self_close) {
+                    const profile = tag.attributes.get("profile") orelse "";
+                    try element_stack.append(.{ .remove = .{ .profile = profile } });
+                },
                 else => return error.SchemaIncorrectTag,
             },
             .extensions => switch (tag_name) {
@@ -344,19 +368,49 @@ pub const Registry = struct {
                 else => return error.SchemaIncorrectTag,
             },
             .extension => switch (tag_name) {
-                .require => if (!tag.self_close) try element_stack.append(.{ .require = {} }),
-                .remove => if (!tag.self_close) try element_stack.append(.{ .remove = {} }),
+                .require => if (!tag.self_close) {
+                    const profile = tag.attributes.get("profile") orelse "";
+                    try element_stack.append(.{ .require = .{ .profile = profile } });
+                },
+                .remove => if (!tag.self_close) {
+                    const profile = tag.attributes.get("profile") orelse "";
+                    try element_stack.append(.{ .remove = .{ .profile = profile } });
+                },
                 else => return error.SchemaIncorrectTag,
             },
-            .require => switch (tag_name) {
-                .command => {},
-                .@"enum" => {},
+            .require => |*require| switch (tag_name) {
+                .command => {
+                    const name = tag.attributes.get("name") orelse {
+                        std.log.err("require interface must have `name` attribute", .{});
+                        return error.SchemaIncorrectTag;
+                    };
+                    try require.interfaces.append(allocator, .{ .command = name });
+                },
+                .@"enum" => {
+                    const name = tag.attributes.get("name") orelse {
+                        std.log.err("require interface must have `name` attribute", .{});
+                        return error.SchemaIncorrectTag;
+                    };
+                    try require.interfaces.append(allocator, .{ .@"enum" = name });
+                },
                 .type => {},
                 else => return error.SchemaIncorrectTag,
             },
-            .remove => switch (tag_name) {
-                .command => {},
-                .@"enum" => {},
+            .remove => |*remove| switch (tag_name) {
+                .command => {
+                    const name = tag.attributes.get("name") orelse {
+                        std.log.err("remove interface must have `name` attribute", .{});
+                        return error.SchemaIncorrectTag;
+                    };
+                    try remove.interfaces.append(allocator, .{ .command = name });
+                },
+                .@"enum" => {
+                    const name = tag.attributes.get("name") orelse {
+                        std.log.err("remove interface must have `name` attribute", .{});
+                        return error.SchemaIncorrectTag;
+                    };
+                    try remove.interfaces.append(allocator, .{ .@"enum" = name });
+                },
                 .type => {},
                 else => return error.SchemaIncorrectTag,
             },
@@ -366,7 +420,7 @@ pub const Registry = struct {
 
     fn handleClosingTag(
         allocator: std.mem.Allocator,
-        _: *@This(),
+        registry: *@This(),
         element_stack: *std.ArrayList(dtd.Element),
         end_tag: xml.XmlTag.EndTag,
         content: []const u8,
@@ -378,7 +432,7 @@ pub const Registry = struct {
             std.log.err("got {} end-tag when no elements have been processed yet", .{tag_name});
             return ParseError.BadTopLevelClose;
         }
-        var element: dtd.Element = element_stack.pop();
+        const element: dtd.Element = element_stack.pop();
         const element_tag = std.meta.activeTag(element);
         if (element_tag != tag_name) {
             std.log.err("got </{s}> but </{s}> expected", .{ @tagName(tag_name), @tagName(element_tag) });
@@ -431,8 +485,11 @@ pub const Registry = struct {
             .registry,
             => std.debug.panic("tried to close self-closing tag '{s}'", .{@tagName(element_tag)}),
 
-            .command => |*command| {
-                command.params.deinit(allocator);
+            .command => |command| switch (top.*) {
+                .commands => {
+                    try registry.commands.putNoClobber(allocator, command.name, command);
+                },
+                else => return ParseError.SchemaIncorrectTag,
             },
             .proto => |proto| switch (top.*) {
                 .command => |*command| {
@@ -460,14 +517,28 @@ pub const Registry = struct {
                 else => return ParseError.SchemaIncorrectTag,
             },
 
-            .extension => {},
-            .feature => {},
-            .require => switch (top.*) {
-                .feature, .extension => {},
+            .extension => |extension| switch (top.*) {
+                .extensions => {
+                    try registry.extensions.putNoClobber(allocator, extension.name, extension);
+                },
                 else => return ParseError.SchemaIncorrectTag,
             },
-            .remove => switch (top.*) {
-                .feature, .extension => {},
+            .feature => |feature| switch (top.*) {
+                .registry => {
+                    try registry.features.append(allocator, feature);
+                },
+                else => return ParseError.SchemaIncorrectTag,
+            },
+            .require => |require| switch (top.*) {
+                inline .feature, .extension => |*api| {
+                    try @field(api.*, "require").append(allocator, require);
+                },
+                else => return ParseError.SchemaIncorrectTag,
+            },
+            .remove => |remove| switch (top.*) {
+                inline .feature, .extension => |*api| {
+                    try @field(api.*, "remove").append(allocator, remove);
+                },
                 else => return ParseError.SchemaIncorrectTag,
             },
         }

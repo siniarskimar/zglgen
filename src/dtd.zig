@@ -39,8 +39,8 @@ pub const Element = union(enum) {
     alias: []const u8,
 
     // <feature> and <extension> related
-    require: void,
-    remove: void,
+    require: Require,
+    remove: Remove,
 
     // Misc tags
     comment: []const u8,
@@ -92,8 +92,18 @@ pub const Feature = struct {
     api: []const u8,
     name: []const u8,
     number: FeatureNumber,
-    require: std.ArrayListUnmanaged(InterfaceElement) = .{},
-    remove: std.ArrayListUnmanaged(InterfaceElement) = .{},
+    require: std.ArrayListUnmanaged(Require) = .{},
+    remove: std.ArrayListUnmanaged(Remove) = .{},
+};
+
+pub const Require = struct {
+    profile: []const u8,
+    interfaces: std.ArrayListUnmanaged(InterfaceElement) = .{},
+};
+
+pub const Remove = struct {
+    profile: []const u8,
+    interfaces: std.ArrayListUnmanaged(InterfaceElement) = .{},
 };
 
 pub const FeatureNumber = struct {
@@ -122,8 +132,8 @@ pub const FeatureNumber = struct {
 
 pub const Extension = struct {
     name: []const u8,
-    require: std.ArrayListUnmanaged(InterfaceElement) = .{},
-    remove: std.ArrayListUnmanaged(InterfaceElement) = .{},
+    require: std.ArrayListUnmanaged(Require) = .{},
+    remove: std.ArrayListUnmanaged(Remove) = .{},
 };
 
 pub const InterfaceElement = union(enum) {
