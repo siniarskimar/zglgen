@@ -26,18 +26,22 @@ jobs:
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.13.0
+      - uses: actions/cache@v4
+        id: gl-xml
+        env:
+          cache-name: cache-gl-xml
+        with:
+          path: gl.xml
+          key: ${{ runner.os }}-build-${{ env.cache-name }}-gl-xml
+      - if: ${{ steps.gl-xml.outputs.cache-hit != 'true' }}
+        run: curl "https://github.com/KhronosGroup/OpenGL-Registry/raw/a959d350b027246018e18a0cf7e2144f8a113def/xml/gl.xml" -o gl.xml
+
       - run: zig build
+
       # check for runtime errors and panics
-      - run: ./zig-out/bin/zglgen --api gl:4.6 --output ./zig-out/gen.zig GL_KHR_debug
+      - run: ./zig-out/bin/zglgen  --output ./zig-out/gen.zig gl.xml
       - run: zig test ./zig-out/gen.zig
-      - run: ./zig-out/bin/zglgen --api glcore:4.6 --output ./zig-out/gen.zig GL_KHR_debug
-      - run: zig test ./zig-out/gen.zig
-      - run: ./zig-out/bin/zglgen --api gles1:1.0 --output ./zig-out/gen.zig GL_KHR_debug
-      - run: zig test ./zig-out/gen.zig
-      - run: ./zig-out/bin/zglgen --api gles2:3.0 --output ./zig-out/gen.zig GL_KHR_debug
-      - run: zig test ./zig-out/gen.zig
-      - run: ./zig-out/bin/zglgen --api glsc2:2.0 --output ./zig-out/gen.zig GL_KHR_debug
-      - run: zig test ./zig-out/gen.zig
+
   compile-release:
     runs-on: ubuntu-latest
     steps:
