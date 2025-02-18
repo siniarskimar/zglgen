@@ -1,191 +1,9 @@
 const std = @import("std");
 const glregistry = @import("./glregistry.zig");
+const dtd = @import("./dtd.zig");
 const Registry = glregistry.Registry;
 const FeatureKey = glregistry.FeatureKey;
 const ExtensionKey = glregistry.ExtensionKey;
-const ExtensionSet = std.StringHashMapUnmanaged(void);
-
-const ModuleRequirements = struct {
-    allocator: std.mem.Allocator,
-    enumgroups: std.StringHashMapUnmanaged(void) = .{},
-    enums: std.ArrayListUnmanaged(Registry.Enum) = .{},
-    commands: std.ArrayListUnmanaged(CommandInfo) = .{},
-
-    const CommandInfo = struct {
-        command: Registry.Command,
-        feature: ?FeatureKey = null,
-        exts: ExtensionSet = .{},
-    };
-
-    pub fn deinit(self: *@This()) void {
-        self.enumgroups.deinit(self.allocator);
-        self.enums.deinit(self.allocator);
-        for (self.commands.items) |*command| {
-            command.exts.deinit(self.allocator);
-        }
-        self.commands.deinit(self.allocator);
-    }
-};
-
-const RequirementInfo = struct {
-    req: Registry.Requirement,
-    feature_ref: ?FeatureKey = null,
-    exts_ref: ExtensionSet = .{},
-};
-
-const RequirementSet = std.StringHashMap(RequirementInfo);
-
-fn resolveRequirementSet(
-    allocator: std.mem.Allocator,
-    registry: *Registry,
-    requirement_set: RequirementSet,
-) !ModuleRequirements {
-    var result = ModuleRequirements{ .allocator = allocator };
-    errdefer result.deinit();
-
-    var req_it = requirement_set.valueIterator();
-    while (req_it.next()) |req_ref| switch (req_ref.req) {
-        .@"enum" => |ename| {
-            const e: Registry.Enum = registry.enums.get(ename) orelse unreachable;
-
-            for (e.groups.items) |egroup_name| {
-                const seen: bool = result.enumgroups.get(egroup_name) != null;
-                if (seen) {
-                    continue;
-                }
-                try result.enumgroups.put(allocator, egroup_name, {});
-            }
-
-            try result.enums.append(allocator, e);
-        },
-        .command => |cname| {
-            const command: Registry.Command = registry.commands.get(cname) orelse unreachable;
-            for (command.params.items) |param| {
-                if (param.group) |egroup_name| {
-                    const seen: bool = result.enumgroups.get(egroup_name) != null;
-
-                    if (seen) {
-                        continue;
-                    }
-                    try result.enumgroups.put(allocator, egroup_name, {});
-                }
-            }
-            try result.commands.append(allocator, .{
-                .command = command,
-                .feature = req_ref.feature_ref,
-                .exts = req_ref.exts_ref.move(), // WARN: This is bugprone for the calee
-            });
-        },
-        .type => {},
-    };
-
-    return result;
-}
-
-/// Obtains requirements needed to generate
-/// a module up to a given feature and given extensions.
-/// The returned value is owned by the caller.
-fn getModuleRequirements(
-    allocator: std.mem.Allocator,
-    registry: *Registry,
-    feature_ref: FeatureKey,
-    extensions: []const []const u8,
-) !ModuleRequirements {
-    var requirement_set = RequirementSet.init(allocator);
-    defer {
-        var it = requirement_set.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.exts_ref.deinit(allocator);
-        }
-        requirement_set.deinit();
-    }
-
-    const api_ref: Registry.Feature.Api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
-
-    const feature_range = registry.getFeatureRange(api_ref) orelse return error.FeatureNotFound;
-    for (feature_range) |feature| {
-        if (feature.number.order(feature_ref.number) == .gt) {
-            break;
-        }
-        for (feature.require_set.items) |req| {
-            const getorput_res = try requirement_set.getOrPut(req.name());
-            if (getorput_res.found_existing) {
-                continue;
-            }
-            getorput_res.value_ptr.* = .{ .req = req, .feature_ref = feature.asKey() };
-        }
-        if (feature_ref.api == .glcore and feature.api == .gl) for (feature.remove_set.items) |req| {
-            _ = requirement_set.remove(req.name());
-        };
-    }
-    for (extensions) |extname| if (registry.extensions.get(extname)) |extension| {
-
-        // skip if unsupported
-        if (std.mem.indexOfScalar(Registry.Feature.Api, extension.supported_api.slice(), feature_ref.api) == null) {
-            continue;
-        }
-        for (extension.require_set.items) |req_ref| {
-            if (req_ref.api != null and req_ref.api != feature_ref.api) {
-                continue;
-            }
-            const req = req_ref.requirement;
-            const getorput_res = try requirement_set.getOrPut(req.name());
-            if (!getorput_res.found_existing) {
-                getorput_res.value_ptr.* = .{ .req = req, .exts_ref = ExtensionSet{} };
-            }
-            if (getorput_res.value_ptr.exts_ref.contains(extname)) {
-                continue;
-            }
-            try getorput_res.value_ptr.exts_ref.putNoClobber(allocator, extname, {});
-        }
-    } else {
-        std.log.warn("Extension '{s}' not found! Skipping!", .{extname});
-    };
-
-    return resolveRequirementSet(allocator, registry, requirement_set);
-}
-
-fn writeProcedureTable(
-    // registry: *const Registry,
-    command_refs: std.ArrayListUnmanaged(ModuleRequirements.CommandInfo),
-    writer: anytype,
-) !void {
-    try writer.writeAll("pub const ProcTable = struct {\n");
-
-    for (command_refs.items) |command_ref| {
-        const command = command_ref.command;
-        try writer.print("{s}: ", .{command.name});
-
-        for (command.name) |c| {
-            try writer.writeByte(std.ascii.toUpper(c));
-        }
-        try writer.writeAll("PROC = null,\n");
-    }
-    for (command_refs.items) |command_ref| {
-        const command = command_ref.command;
-        const params = command.params;
-        try writer.writeAll("pub const ");
-
-        for (command.name) |c| {
-            try writer.writeByte(std.ascii.toUpper(c));
-        }
-        try writer.writeAll("PROC = ?*const fn(\n");
-
-        const param_len = params.items.len;
-
-        if (params.items.len > 0) {
-            for (params.items[0 .. param_len - 1]) |param| {
-                try writer.print("{s}: {s},", .{ param.name, param.type });
-            }
-            const last_param = params.items[param_len - 1];
-            try writer.print("{s}: {s}", .{ last_param.name, last_param.type });
-        }
-        try writer.print(") callconv(.C) {s};", .{command.return_type});
-    }
-
-    try writer.writeAll("};\n");
-    // _ = registry;
-}
 
 // https://www.khronos.org/opengl/wiki/OpenGL_Type
 const MODULE_TYPE_PREAMBLE =
@@ -334,218 +152,311 @@ pub fn writeFunction(command: Registry.Command, writer: anytype) !void {
     try writer.writeAll("});\n}\n");
 }
 
-pub fn writeFeatureLoaderFunction(feature: FeatureKey, requirements: ModuleRequirements, writer: anytype) !void {
-    try writer.writeAll(
-        \\pub fn load
-    );
-
-    for (@tagName(feature.api)) |c| {
-        try writer.writeByte(std.ascii.toUpper(c));
-    }
-    try writer.print("{}{}", .{ feature.number.major, feature.number.minor });
-
-    try writer.writeAll(
-        \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
-    );
-
-    var command_count: u32 = 0;
-
-    for (requirements.commands.items) |command_info| {
-        const cmd_feature = command_info.feature orelse continue;
-        const feature_order = cmd_feature.number.order(feature.number);
-
-        if (cmd_feature.api != feature.api or feature_order != .eq) {
-            continue;
-        }
-        command_count += 1;
-
-        try writer.print(
-            "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
-            .{command_info.command.name},
-        );
-    }
-
-    if (command_count == 0) {
-        try writer.writeAll(
-            \\_ = proc_table; _ = getProcAddress;
-        );
-    }
-
-    try writer.writeAll(
-        \\}
-        \\
-    );
-}
-
-pub fn writeExtensionLoaderFunction(ext: ExtensionKey, requirements: ModuleRequirements, writer: anytype) !void {
-    try writer.writeAll(
-        \\pub fn load
-    );
-
-    for (ext) |c| {
-        try writer.writeByte(std.ascii.toUpper(c));
-    }
-
-    try writer.writeAll(
-        \\(proc_table: *ProcTable, getProcAddress: GETPROCADDRESSPROC) !void {
-    );
-    var command_count: u32 = 0;
-
-    for (requirements.commands.items) |command_info| {
-        if (command_info.exts.count() == 0 or !command_info.exts.contains(ext)) {
-            continue;
-        }
-        command_count += 1;
-
-        try writer.print(
-            "proc_table.{0s} = @ptrCast(getProcAddress(\"{0s}\") orelse return error.LoadError);\n",
-            .{command_info.command.name},
-        );
-    }
-
-    if (command_count == 0) {
-        try writer.writeAll(
-            \\_ = proc_table; _ = getProcAddress;
-        );
-    }
-
-    try writer.writeAll(
-        \\}
-        \\
-    );
-}
-
-fn writeEnum(@"enum": Registry.Enum, writer: anytype) !void {
-    const e = @"enum";
-    const enum_type = if (e.type_override) |override| switch (override) {
-        .uint => "u32",
-        .uint64 => "u64",
-    } else if (e.groups.items.len == 1) e.groups.items[0] else "GLenum";
+fn writeEnum(e: dtd.Enum, writer: std.io.AnyWriter) !void {
+    const enum_type = switch (e.value_type) {
+        .integer => "i32",
+        .unsigned => "u32",
+        .unsigned64 => "u64",
+    };
 
     try writer.print(
-        "pub const {s}: {s} = 0x{X};",
+        "pub const {s}: {s} = {s};",
         .{
             e.name,
             enum_type,
             e.value,
         },
     );
-    // Add a comment to make it at least searchable.
-    if (e.groups.items.len > 1 or e.type_override != null) {
-        try writer.writeAll("// groups:");
-        for (e.groups.items) |egroup_name| {
+    var groups_it = std.mem.splitScalar(u8, e.groups, ',');
+    if (groups_it.next()) |first| {
+        try writer.writeAll("// groups: ");
+        try writer.writeAll(first);
+        while (groups_it.next()) |group| {
             try writer.writeByte(' ');
-            try writer.writeAll(egroup_name);
+            try writer.writeAll(group);
         }
     }
     try writer.writeByte('\n');
 }
 
-/// Given a feature and a registry
+fn writeFeatureApiIndex(
+    allocator: std.mem.Allocator,
+    feature: dtd.Feature,
+    writer: std.io.AnyWriter,
+) !void {
+    try writer.print("pub const {0s}: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{feature.name});
+
+    var dedup_set = std.StringHashMap(void).init(allocator);
+    defer dedup_set.deinit();
+
+    for (feature.require.items) |require| {
+        for (require.interfaces.items) |interface| {
+            if (interface != .command) {
+                continue;
+            }
+            const cmd = interface.command;
+            const getorput = try dedup_set.getOrPut(cmd);
+            if (getorput.found_existing) {
+                continue;
+            }
+            try writer.print(".{s} = true,\n", .{cmd});
+        }
+    }
+    try writer.writeAll("},};\n");
+    dedup_set.clearRetainingCapacity();
+
+    // WARN: Assumption that features with <remove> are core profiles
+    // TODO: Check if this assumption is correct for APIs other than GL
+    if (feature.remove.items.len != 0) {
+        try writer.print("pub const {0s}_CORE: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{feature.name});
+
+        for (feature.require.items) |require| {
+            for (require.interfaces.items) |interface| {
+                if (interface != .command) {
+                    continue;
+                }
+                const cmd = interface.command;
+                const getorput = try dedup_set.getOrPut(cmd);
+                if (getorput.found_existing) {
+                    continue;
+                }
+                try writer.print(".{s} = true,\n", .{cmd});
+            }
+        }
+        try writer.writeAll("},\n .remove_commands = .{ \n");
+        dedup_set.clearRetainingCapacity();
+
+        for (feature.remove.items) |remove| {
+            for (remove.interfaces.items) |interface| {
+                if (interface != .command) {
+                    continue;
+                }
+                const cmd = interface.command;
+                const getorput = try dedup_set.getOrPut(cmd);
+                if (getorput.found_existing) {
+                    continue;
+                }
+                try writer.print(".{s} = true,\n", .{cmd});
+            }
+        }
+
+        try writer.writeAll("},};\n");
+    }
+}
+
+fn writeExtensionApiIndex(
+    ext: dtd.Extension,
+    writer: std.io.AnyWriter,
+) !void {
+    try writer.print("pub const {0s}: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{ext.name});
+    for (ext.require.items) |require| {
+        if (require.profile.len != 0) {
+            std.log.warn("TODO: not every command is being exported!!!", .{});
+            continue;
+        }
+        for (require.interfaces.items) |interface| {
+            if (interface != .command) {
+                continue;
+            }
+            try writer.print(".{s} = true,", .{interface.command});
+        }
+    }
+
+    if (ext.remove.items.len != 0) {
+        std.debug.panic("extension remove requirements are unsupported (by {s})", .{ext.name});
+    }
+    try writer.writeAll("},};\n");
+}
+
+fn writeApiIndex(
+    allocator: std.mem.Allocator,
+    registry: *const Registry,
+    writer: std.io.AnyWriter,
+) !void {
+    try writer.writeAll(
+        \\ const ApiInfo = struct {
+        \\     name: [:0]const u8,
+        \\     commands: CommandFlags,
+        \\     remove_commands: CommandFlags = .{},
+        \\ };
+        \\
+        \\ pub const apis = struct {
+        \\
+    );
+
+    for (registry.features.items) |feature| {
+        try writeFeatureApiIndex(allocator, feature, writer);
+    }
+
+    {
+        var it = registry.extensions.valueIterator();
+        while (it.next()) |ext| {
+            try writeExtensionApiIndex(ext.*, writer);
+        }
+    }
+
+    try writer.writeAll(
+        \\ };
+        \\
+    );
+}
+
+fn writeCommandFlagsStruct(
+    registry: *Registry,
+    writer: std.io.AnyWriter,
+) !void {
+    try writer.writeAll(
+        \\
+        \\ const CommandFlags = struct {
+        \\
+    );
+
+    var it = registry.commands.valueIterator();
+    while (it.next()) |entry| {
+        try writer.print("{s}: bool = false, \n", .{entry.name});
+    }
+
+    try writer.writeAll(
+        \\    pub const Enum = blk: {
+        \\        @setEvalBranchQuota(100_000);
+        \\        break :blk std.meta.FieldEnum(@This());
+        \\    };
+        \\ };
+    );
+}
+
+fn writeCommandPfns(
+    registry: *Registry,
+    writer: std.io.AnyWriter,
+) !void {
+    var it = registry.commands.valueIterator();
+    while (it.next()) |cmd| {
+        const first_uppercase = for (cmd.name, 0..) |c, idx| {
+            if (std.ascii.isUpper(c)) break idx;
+        } else return error.BadGlCommandName;
+
+        try writer.print("pub const Pfn{s} = *const fn(", .{cmd.name[first_uppercase..]});
+        for (cmd.params.items, 0..) |param, idx| {
+            try writer.print("@\"{s}\": GLint", .{param.name});
+            if (idx + 1 != cmd.params.items.len) {
+                try writer.writeAll(", ");
+            }
+        }
+
+        try writer.print(") callconv(.C) GLint;\n", .{});
+    }
+    try writer.writeAll(
+        \\
+        \\fn CommandPfn(comptime cmd: CommandFlags.Enum) type {
+        \\    return switch(cmd) {
+    );
+
+    it = registry.commands.valueIterator();
+    while (it.next()) |cmd| {
+        const first_uppercase = for (cmd.name, 0..) |c, idx| {
+            if (std.ascii.isUpper(c)) break idx;
+        } else return error.BadGlCommandName;
+
+        try writer.print(".{s} => Pfn{s},\n", .{ cmd.name, cmd.name[first_uppercase..] });
+    }
+
+    try writer.writeAll(
+        \\  };
+        \\}
+    );
+}
+
+/// Given a registry
 /// generates a bindings module and writes it to `writer`
 pub fn generateModule(
     allocator: std.mem.Allocator,
     registry: *Registry,
-    feature_ref: FeatureKey,
-    extensions: []const []const u8,
     writer: anytype,
 ) !void {
-    var requirements = try getModuleRequirements(allocator, registry, feature_ref, extensions);
-    defer requirements.deinit();
-
-    std.log.info("Generating {} enums, {} commands", .{ requirements.enums.items.len, requirements.commands.items.len });
-
-    // Write type declarations
     try writer.writeAll(MODULE_TYPE_PREAMBLE);
 
     {
-        var kit = requirements.enumgroups.keyIterator();
-        while (kit.next()) |egroup| {
-            try writer.print("pub const {s} = GLenum;\n", .{egroup.*});
+        var it = registry.enums.valueIterator();
+        while (it.next()) |e| {
+            try writeEnum(e.*, writer.any());
         }
     }
 
-    for (requirements.enums.items) |e| {
-        try writeEnum(e, writer);
-    }
+    try writeCommandPfns(registry, writer.any());
 
-    try writeProcedureTable(requirements.commands, writer);
+    try writeApiIndex(allocator, registry, writer.any());
 
-    for (requirements.commands.items) |command_ref| {
-        try writeFunction(command_ref.command, writer);
-    }
+    try writeCommandFlagsStruct(registry, writer.any());
 
     try writer.writeAll(
-        \\threadlocal var current_proc_table: ?ProcTable = null;
+        \\ pub fn DispatchTable(comptime api_list: []const ApiInfo) type {
+        \\     // Sort in terms of standard first then extenstions.
+        \\     // Standard API must be applied in version order.
+        \\     @setEvalBranchQuota(1_000_000);
+        \\     const sorted_apis = comptime blk: {
+        \\         var standard_count: usize = 0;
+        \\         var result: [api_list.len]ApiInfo = undefined;
+        \\         var end_idx: usize = api_list.len;
+        \\         for (api_list) |api| {
+        \\             if (std.mem.indexOfPosLinear(u8, api.name, 0, "_VERSION_") == null) {
+        \\                 end_idx -= 1;
+        \\                 result[end_idx] = api;
+        \\                 continue;
+        \\             }
+        \\             result[standard_count] = api;
+        \\             standard_count += 1;
+        \\         }
+        \\         std.mem.sortUnstable(
+        \\             ApiInfo,
+        \\             result[0..standard_count],
+        \\             {},
+        \\             struct {
+        \\                 pub fn lessThan(_: void, lhs: ApiInfo, rhs: ApiInfo) bool {
+        \\                     return std.mem.orderZ(u8, lhs.name, rhs.name) == .lt;
+        \\                 }
+        \\             }.lessThan,
+        \\         );
+        \\         break :blk result;
+        \\     };
         \\
-    );
-
-    const feature_ref_api = if (feature_ref.api == .glcore) .gl else feature_ref.api;
-    const feature_range = registry.getFeatureRange(feature_ref_api) orelse return error.FeatureNotFound;
-    for (feature_range) |feature| {
-        if (feature.number.order(feature_ref.number) == .gt) {
-            continue;
-        }
-        try writeFeatureLoaderFunction(feature.asKey(), requirements, writer);
-    }
-
-    try writer.writeAll(
-        \\pub fn load
-    );
-
-    for (@tagName(feature_ref_api)) |c| {
-        try writer.writeByte(std.ascii.toUpper(c));
-    }
-
-    try writer.writeAll(
-        \\(getProcAddress: GETPROCADDRESSPROC) !ProcTable {
-        \\    var table = ProcTable{};
-    );
-
-    for (feature_range) |feature| {
-        if (feature.number.order(feature_ref.number) == .gt) {
-            continue;
-        }
-        const tagname = @tagName(feature.api);
-
-        try writer.writeAll(
-            \\    load
-        );
-        for (tagname) |c| {
-            try writer.writeByte(std.ascii.toUpper(c));
-        }
-
-        try writer.print("{}{}(&table,getProcAddress) catch return error.", .{ feature.number.major, feature.number.minor });
-
-        for (tagname) |c| {
-            try writer.writeByte(std.ascii.toUpper(c));
-        }
-        try writer.print("{}{}LoadFailed;\n", .{ feature.number.major, feature.number.minor });
-    }
-
-    try writer.writeAll(
-        \\    return table;
-        \\}
+        \\     comptime var field_count: usize = 0;
+        \\     var cmds: CommandFlags = .{};
+        \\     inline for (sorted_apis) |api| {
+        \\         inline for (std.meta.fields(CommandFlags)) |field| {
+        \\             const merge = @field(cmds, field.name) or @field(api.commands, field.name);
+        \\             @field(cmds, field.name) =
+        \\                 !@field(api.remove_commands, field.name) and merge;
+        \\         }
+        \\     }
         \\
-    );
-
-    for (extensions) |ext| {
-        _ = registry.extensions.get(ext) orelse {
-            std.log.err("Extension {s} not found in registry! Cannot write loader function!", .{ext});
-            return error.ExtensionNotFound;
-        };
-        try writeExtensionLoaderFunction(ext, requirements, writer);
-    }
-
-    try writer.writeAll(
-        \\pub fn makeProcTableCurrent(proc_table: ?ProcTable) void {
-        \\      current_proc_table = proc_table;
-        \\}
-        \\pub fn getProcTablePtr() ?*ProcTable {
-        \\      return &(current_proc_table orelse return null);
-        \\}
+        \\     inline for (std.meta.fields(CommandFlags)) |field| {
+        \\         field_count += @intFromBool(@field(cmds, field.name));
+        \\     }
         \\
-        \\test {@setEvalBranchQuota(1_000_000);_ = std.testing.refAllDecls(@This());}
+        \\     const StructField = std.builtin.Type.StructField;
+        \\     comptime var fields: [field_count]StructField = undefined;
+        \\     comptime var field_idx: usize = 0;
         \\
+        \\     inline for (std.meta.fields(CommandFlags)) |field| {
+        \\         if (!@field(cmds, field.name)) continue;
+        \\         const cmd_enum = @field(CommandFlags.Enum, field.name);
+        \\
+        \\         const T = ?CommandPfn(cmd_enum);
+        \\         fields[field_idx] = .{
+        \\             .name = field.name,
+        \\             .type = T,
+        \\             .default_value = @ptrCast(&@as(T, null)),
+        \\             .is_comptime = false,
+        \\             .alignment = @alignOf(T),
+        \\         };
+        \\         field_idx += 1;
+        \\     }
+        \\     const Mixin = struct {
+        \\         // pub fn load(getProcAddress: *const fn () void) @This() {}
+        \\     };
+        \\     var type_info = @typeInfo(Mixin);
+        \\     type_info.Struct.fields = type_info.Struct.fields ++ fields;
+        \\     return @Type(type_info);
+        \\ }
     );
 }
