@@ -72,6 +72,16 @@ pub fn main() !u8 {
         return err;
     };
     defer registry_file.close();
+
+    const module_output = if (clapres.args.output) |outpath|
+        std.fs.cwd().createFile(outpath, .{}) catch |err| {
+            std.log.err("failed to create output file: {}", .{err});
+            return err;
+        }
+    else
+        std.io.getStdOut();
+    defer module_output.close();
+
     var timer = std.time.Timer.start() catch unreachable;
 
     var registry = try glregistry.Registry.parse(gpallocator, registry_file);
@@ -80,7 +90,14 @@ pub fn main() !u8 {
     const parse_duration = timer.read();
     std.log.info("parsing took: {} ms", .{parse_duration / std.time.ns_per_ms});
 
-    // zig_generator.generateModule(gpallocator, &registry, , , );
+    var buffered_writer = std.io.bufferedWriter(module_output.writer());
+    defer buffered_writer.flush() catch unreachable;
+
+    try zig_generator.generateModule(
+        gpallocator,
+        &registry,
+        buffered_writer.writer(),
+    );
 
     return 0;
 }
