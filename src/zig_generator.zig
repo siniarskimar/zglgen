@@ -184,7 +184,14 @@ fn writeFeatureApiIndex(
     feature: dtd.Feature,
     writer: std.io.AnyWriter,
 ) !void {
-    try writer.print("pub const {0s}: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{feature.name});
+    try writer.print(
+        \\ pub const {0s} = .{{
+        \\   .name = "{0s}",
+        \\   .is_feature = true,
+        \\   .commands = .{{
+        ++ "\n",
+        .{feature.name},
+    );
 
     var dedup_set = std.StringHashMap(void).init(allocator);
     defer dedup_set.deinit();
@@ -205,10 +212,17 @@ fn writeFeatureApiIndex(
     try writer.writeAll("},};\n");
     dedup_set.clearRetainingCapacity();
 
-    // WARN: Assumption that features with <remove> are core profiles
-    // TODO: Check if this assumption is correct for APIs other than GL
+    // GL 3.2 is the only profile using <remove>
+    // Its used to remove compat commands
     if (feature.remove.items.len != 0) {
-        try writer.print("pub const {0s}_CORE: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{feature.name});
+        try writer.print(
+            \\ pub const {0s}_CORE = .{{
+            \\   .name = "{0s}",
+            \\   .is_feature = true,
+            \\   .commands = .{{
+            ++ "\n",
+            .{feature.name},
+        );
 
         for (feature.require.items) |require| {
             for (require.interfaces.items) |interface| {
@@ -220,10 +234,18 @@ fn writeFeatureApiIndex(
                 if (getorput.found_existing) {
                     continue;
                 }
-                try writer.print(".{s} = true,\n", .{cmd});
+                try writer.print(
+                    \\ .{s} = true,
+                ,
+                    .{cmd},
+                );
             }
         }
-        try writer.writeAll("},\n .remove_commands = .{ \n");
+        try writer.writeAll(
+            \\   },
+            \\   .remove_commands = .{
+        ++ "\n");
+
         dedup_set.clearRetainingCapacity();
 
         for (feature.remove.items) |remove| {
@@ -240,7 +262,9 @@ fn writeFeatureApiIndex(
             }
         }
 
-        try writer.writeAll("},};\n");
+        try writer.writeAll(
+            \\ },};
+        ++ "\n");
     }
 }
 
@@ -248,7 +272,12 @@ fn writeExtensionApiIndex(
     ext: dtd.Extension,
     writer: std.io.AnyWriter,
 ) !void {
-    try writer.print("pub const {0s}: ApiInfo = .{{\n .name = \"{0s}\",\n .commands = .{{ \n", .{ext.name});
+    try writer.print(
+        \\ pub const {0s} = .{{
+        \\    .name = "{0s}",
+        \\    .commands = .{{
+    , .{ext.name});
+
     for (ext.require.items) |require| {
         if (require.profile.len != 0) {
             std.log.warn("TODO: not every command is being exported!!!", .{});
@@ -273,12 +302,14 @@ fn writeApiIndex(
     registry: *const Registry,
     writer: std.io.AnyWriter,
 ) !void {
+    // const ApiInfo = struct {
+    //     name: [:0]const u8,
+    //     commands: CommandFlags,
+    //     remove_commands: CommandFlags = .{},
+    //     is_feature: bool = false,
+    // };
+
     try writer.writeAll(
-        \\ const ApiInfo = struct {
-        \\     name: [:0]const u8,
-        \\     commands: CommandFlags,
-        \\     remove_commands: CommandFlags = .{},
-        \\ };
         \\
         \\ pub const apis = struct {
         \\
@@ -305,6 +336,7 @@ fn writeCommandFlagsStruct(
     registry: *Registry,
     writer: std.io.AnyWriter,
 ) !void {
+    // packed struct is not worth as it will slow down compilation
     try writer.writeAll(
         \\
         \\ const CommandFlags = struct {
@@ -322,6 +354,7 @@ fn writeCommandFlagsStruct(
         \\        break :blk std.meta.FieldEnum(@This());
         \\    };
         \\ };
+        \\
     );
 }
 
@@ -347,8 +380,8 @@ fn writeCommandPfns(
     }
     try writer.writeAll(
         \\
-        \\fn CommandPfn(comptime cmd: CommandFlags.Enum) type {
-        \\    return switch(cmd) {
+        \\pub const command_pfns_map = struct {
+        \\
     );
 
     it = registry.commands.valueIterator();
@@ -357,11 +390,10 @@ fn writeCommandPfns(
             if (std.ascii.isUpper(c)) break idx;
         } else return error.BadGlCommandName;
 
-        try writer.print(".{s} => Pfn{s},\n", .{ cmd.name, cmd.name[first_uppercase..] });
+        try writer.print("pub const {s} = Pfn{s};\n", .{ cmd.name, cmd.name[first_uppercase..] });
     }
 
     try writer.writeAll(
-        \\  };
         \\}
     );
 }
@@ -386,77 +418,128 @@ pub fn generateModule(
 
     try writeApiIndex(allocator, registry, writer.any());
 
-    try writeCommandFlagsStruct(registry, writer.any());
-
     try writer.writeAll(
-        \\ pub fn DispatchTable(comptime api_list: []const ApiInfo) type {
-        \\     // Sort in terms of standard first then extenstions.
-        \\     // Standard API must be applied in version order.
-        \\     @setEvalBranchQuota(1_000_000);
-        \\     const sorted_apis = comptime blk: {
-        \\         var standard_count: usize = 0;
-        \\         var result: [api_list.len]ApiInfo = undefined;
-        \\         var end_idx: usize = api_list.len;
-        \\         for (api_list) |api| {
-        \\             if (std.mem.indexOfPosLinear(u8, api.name, 0, "_VERSION_") == null) {
-        \\                 end_idx -= 1;
-        \\                 result[end_idx] = api;
-        \\                 continue;
-        \\             }
-        \\             result[standard_count] = api;
-        \\             standard_count += 1;
-        \\         }
-        \\         std.mem.sortUnstable(
-        \\             ApiInfo,
-        \\             result[0..standard_count],
-        \\             {},
-        \\             struct {
-        \\                 pub fn lessThan(_: void, lhs: ApiInfo, rhs: ApiInfo) bool {
-        \\                     return std.mem.orderZ(u8, lhs.name, rhs.name) == .lt;
-        \\                 }
-        \\             }.lessThan,
-        \\         );
-        \\         break :blk result;
-        \\     };
         \\
-        \\     comptime var field_count: usize = 0;
-        \\     var cmds: CommandFlags = .{};
-        \\     inline for (sorted_apis) |api| {
-        \\         inline for (std.meta.fields(CommandFlags)) |field| {
-        \\             const merge = @field(cmds, field.name) or @field(api.commands, field.name);
-        \\             @field(cmds, field.name) =
-        \\                 !@field(api.remove_commands, field.name) and merge;
-        \\         }
-        \\     }
+        \\fn sortApiList(comptime api_list: anytype) type {
+        \\    const Struct = std.builtin.Type.Struct;
+        \\    var feature_count: usize = 0;
+        \\    var result: [api_list.len]Struct = undefined;
+        \\    var end_idx: usize = api_list.len;
+        \\    for (api_list) |api| {
+        \\        if (@hasField(@TypeOf(api), "is_feature") and api.is_feature) {
+        \\            result[feature_count] = api;
+        \\            feature_count += 1;
+        \\            continue;
+        \\        }
+        \\        end_idx -= 1;
+        \\        result[end_idx] = api;
+        \\    }
+        \\    std.mem.sortUnstable(
+        \\        Struct,
+        \\        result[0..feature_count],
+        \\        {},
+        \\        struct {
+        \\            pub fn lessThan(_: void, lhs: Struct, rhs: Struct) bool {
+        \\                return std.mem.orderZ(u8, lhs.name, rhs.name) == .lt;
+        \\            }
+        \\        }.lessThan,
+        \\    );
+        \\    return result;
+        \\}
         \\
-        \\     inline for (std.meta.fields(CommandFlags)) |field| {
-        \\         field_count += @intFromBool(@field(cmds, field.name));
-        \\     }
+        \\fn CommandFlags(comptime api_list: anytype) type {
+        \\    const StructField = std.builtin.Type.StructField;
         \\
-        \\     const StructField = std.builtin.Type.StructField;
-        \\     comptime var fields: [field_count]StructField = undefined;
-        \\     comptime var field_idx: usize = 0;
+        \\    var cmd_names: []const [:0]const u8 = std.meta.fieldNames(@TypeOf(api_list[0].commands));
+        \\    inline for (1..api_list.len) |idx| {
+        \\        cmd_names = cmd_names ++ std.meta.fieldNames(@TypeOf(api_list[idx].commands));
+        \\    }
         \\
-        \\     inline for (std.meta.fields(CommandFlags)) |field| {
-        \\         if (!@field(cmds, field.name)) continue;
-        \\         const cmd_enum = @field(CommandFlags.Enum, field.name);
+        \\    var cmds: [cmd_names.len]StructField = undefined;
+        \\    for (cmd_names, 0..) |name, idx| {
+        \\        cmds[idx] = .{
+        \\            .name = name,
+        \\            .type = bool,
+        \\            .default_value = @ptrCast(&@as(bool, false)),
+        \\            .is_comptime = false,
+        \\            .alignment = @alignOf(bool),
+        \\        };
+        \\    }
+        // TODO: Dedup commands
         \\
-        \\         const T = ?CommandPfn(cmd_enum);
-        \\         fields[field_idx] = .{
-        \\             .name = field.name,
-        \\             .type = T,
-        \\             .default_value = @ptrCast(&@as(T, null)),
-        \\             .is_comptime = false,
-        \\             .alignment = @alignOf(T),
-        \\         };
-        \\         field_idx += 1;
-        \\     }
-        \\     const Mixin = struct {
-        \\         // pub fn load(getProcAddress: *const fn () void) @This() {}
-        \\     };
-        \\     var type_info = @typeInfo(Mixin);
-        \\     type_info.Struct.fields = type_info.Struct.fields ++ fields;
-        \\     return @Type(type_info);
-        \\ }
+        \\    return @Type(.{ .Struct = .{
+        \\        .layout = .auto,
+        \\        .fields = &cmds,
+        \\        .decls = &.{},
+        \\        .is_tuple = false,
+        \\    } });
+        \\}
+        \\
+        \\pub fn DispatchTable(comptime api_list: anytype) type {
+        \\    const ApiList = @TypeOf(api_list);
+        \\    const apilist_typeinfo = @typeInfo(ApiList);
+        \\    if (apilist_typeinfo != .Struct or !apilist_typeinfo.Struct.is_tuple) {
+        \\        @compileError("api list must be a tuple");
+        \\    }
+        \\    // Sort in terms of standard first then extenstions.
+        \\    // Standard API must be applied in version order.
+        \\    return struct {
+        \\        pfns: Pfns,
+        \\
+        \\        const Pfns = blk: {
+        \\            @setEvalBranchQuota(1_000_000);
+        \\            // const sorted_apis = sortApiList(api_list);
+        \\
+        \\            var field_count: usize = 0;
+        \\            const CmdFlags = CommandFlags(api_list);
+        \\            var cmds: CmdFlags = .{};
+        \\
+        \\            for (api_list) |api| {
+        \\                for (std.meta.fields(CmdFlags)) |field| {
+        \\                    const merge = @field(cmds, field.name) or (@hasField(@TypeOf(api.commands), field.name) and @field(api.commands, field.name));
+        \\                    const remove = @hasField(@TypeOf(api), "remove_commands") and @field(api.remove_commands, field.name);
+        \\                    @field(cmds, field.name) = !remove and merge;
+        \\                }
+        \\            }
+        \\
+        \\            for (std.meta.fields(CmdFlags)) |field| {
+        \\                field_count += @intFromBool(@field(cmds, field.name));
+        \\            }
+        \\
+        \\            const StructField = std.builtin.Type.StructField;
+        \\            var fields: [field_count]StructField = undefined;
+        \\            var field_idx: usize = 0;
+        \\
+        \\            for (std.meta.fields(CmdFlags)) |field| {
+        \\                if (!@field(cmds, field.name)) continue;
+        \\
+        \\                const T = @field(command_pfns_map, field.name);
+        \\                fields[field_idx] = .{
+        \\                    .name = field.name,
+        \\                    .type = T,
+        \\                    .default_value = null,
+        \\                    .is_comptime = false,
+        \\                    .alignment = @alignOf(T),
+        \\                };
+        \\                field_idx += 1;
+        \\            }
+        \\            break :blk @Type(.{ .Struct = .{
+        \\                .layout = .auto,
+        \\                .fields = &fields,
+        \\                .decls = &.{},
+        \\                .is_tuple = false,
+        \\            } });
+        \\        };
+        \\
+        \\        pub fn load(getProcAddress: GETPROCADDRESSPROC) error{CommandLoadFail}!@This() {
+        \\            var result: @This() = undefined;
+        \\            inline for (std.meta.fields(Pfns)) |field| {
+        \\                @field(result.pfns, field.name) = @ptrCast(getProcAddress(field.name) orelse return error.CommandLoadFail);
+        \\            }
+        \\            return result;
+        \\        }
+        \\    };
+        \\}
+        \\
     );
 }
